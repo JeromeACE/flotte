@@ -1,2 +1,2 @@
-Préparé le 20.10.2026 16:57
-Dernier enregistrement : 9efd7d8 20.10.2026 16:30 Enregistrement automatique 2026-10-20 16:30 : backups/_journal_sauvegarde.log, backups/app_state_2026-10-20_162719.json, backups/index_avant_2026-10-20_doublon_alerte_travaux.html
+Préparé le 20.10.2026 17:22
+Dernier enregistrement : b6b7e16 20.10.2026 17:17 PDF : aper├ºu des factures et constats r├®tabli avec les documents priv├®s

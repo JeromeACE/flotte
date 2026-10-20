@@ -2305,6 +2305,17 @@ function escapeHtml(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'
 // navigateurs l'affichent nativement) ; les autres types renvoient vers "Ouvrir dans
 // un nouvel onglet". Utilisé notamment pour les rapports de police / constats amiables
 // joints à un dossier de sinistre.
+// Copie locale d'un PDF (lien signé si besoin), gardée le temps de la session.
+const cachePdfLocal = new Map();
+async function pdfEnLocal(url){
+  if(cachePdfLocal.has(url)) return cachePdfLocal.get(url);
+  const signee = typeof urlSignee === 'function' ? await urlSignee(url) : url;
+  const rep = await fetch(signee);
+  if(!rep.ok) throw new Error('HTTP ' + rep.status);
+  const local = URL.createObjectURL(new Blob([await rep.arrayBuffer()], {type:'application/pdf'}));
+  cachePdfLocal.set(url, local);
+  return local;
+}
 function openDocPreview(url, filename){
   document.getElementById('docPreviewTitle').textContent = filename || 'Document';
   const body = document.getElementById('docPreviewBody');
@@ -2315,7 +2326,15 @@ function openDocPreview(url, filename){
   } else if(isImg){
     body.innerHTML = `<img class="doc-preview-img" src="${escapeHtml(url)}" alt="${escapeHtml(filename||'')}">`;
   } else if(isPdf){
-    body.innerHTML = `<iframe class="doc-preview-frame" src="${escapeHtml(url)}" title="${escapeHtml(filename||'')}"></iframe>`;
+    // Depuis les documents privés (2026-10-20), le lien signé de Supabase est servi avec une
+    // protection qui empêche le navigateur d'afficher le PDF (il propose de le télécharger).
+    // On récupère donc le fichier puis on l'affiche depuis une copie locale (lien « blob »).
+    body.innerHTML = '<div class="empty">Chargement du document…</div>';
+    pdfEnLocal(url).then(local=>{
+      if(!document.getElementById('modalDocPreview').classList.contains('open')) return;
+      body.innerHTML = `<iframe class="doc-preview-frame" src="${local}" title="${escapeHtml(filename||'')}"></iframe>`;
+      document.getElementById('docPreviewOpenNewTab').href = local;
+    }).catch(()=>{ body.innerHTML = '<div class="empty">Impossible de charger le document (connexion ?). Réessayez.</div>'; });
   } else {
     body.innerHTML = '<div class="empty">Aperçu non disponible pour ce type de fichier — utilisez « Ouvrir dans un nouvel onglet ».</div>';
   }
@@ -3435,7 +3454,10 @@ function activerDocumentsSignes(){
     if(!a || !RE_URL_PUBLIQUE.test(a.getAttribute('href'))) return;
     e.preventDefault();
     const w = window.open('', '_blank');
-    urlSignee(a.getAttribute('href')).then(u=>{ if(w) w.location = u; else location.href = u; });
+    const href = a.getAttribute('href');
+    // PDF : affiché depuis une copie locale (voir pdfEnLocal), sinon le navigateur le télécharge.
+    const ouvrir = /\.pdf($|[?#])/i.test(href) ? pdfEnLocal(href) : urlSignee(href);
+    ouvrir.then(u=>{ if(w) w.location = u; else location.href = u; }).catch(()=>{ if(w) w.close(); showToast('Impossible d\'ouvrir le document (connexion ?).'); });
   }, true);
 }
 // Réglages → Comptes utilisateurs (2026-10-07). La liste du personnel sert de base :
