@@ -1,2 +1,2 @@
-Préparé le 20.10.2026 17:34
-Dernier enregistrement : a7964f4 20.10.2026 17:32 PDF : les liens ┬½ Voir ┬╗ d├®j├á s├®curis├®s s'ouvrent aussi en aper├ºu
+Préparé le 20.10.2026 17:41
+Dernier enregistrement : 0b7548f 20.10.2026 17:40 Factures : ┬½ Voir ┬╗ ouvre le PDF dans l'aper├ºu, comme les constats

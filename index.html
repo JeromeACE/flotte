@@ -2334,7 +2334,7 @@ function openDocPreview(url, filename){
       if(!document.getElementById('modalDocPreview').classList.contains('open')) return;
       body.innerHTML = `<iframe class="doc-preview-frame" src="${local}" title="${escapeHtml(filename||'')}"></iframe>`;
       document.getElementById('docPreviewOpenNewTab').href = local;
-    }).catch(()=>{ body.innerHTML = '<div class="empty">Impossible de charger le document (connexion ?). Réessayez.</div>'; });
+    }).catch(err=>{ body.innerHTML = `<div class="empty">Impossible de charger le document (connexion ?). Réessayez.<br><span style="font-size:11px;color:var(--grey);">Détail : ${escapeHtml(String(err && err.message || err))}</span></div>`; });
   } else {
     body.innerHTML = '<div class="empty">Aperçu non disponible pour ce type de fichier — utilisez « Ouvrir dans un nouvel onglet ».</div>';
   }
@@ -3439,7 +3439,7 @@ function activerDocumentsSignes(){
     if(!el || el.nodeType !== 1) return;
     ['src','href'].forEach(attr=>{
       const v = el.getAttribute(attr);
-      if(v && RE_URL_PUBLIQUE.test(v)) urlSignee(v).then(u=>{ if(u !== v && el.getAttribute(attr) === v) el.setAttribute(attr, u); });
+      if(v && RE_URL_PUBLIQUE.test(v)) urlSignee(v).then(u=>{ if(u !== v && el.getAttribute(attr) === v){ el.dataset.urlOrigine = v; el.setAttribute(attr, u); } });
     });
   };
   document.querySelectorAll('img,iframe,a').forEach(traiter);
@@ -3452,15 +3452,21 @@ function activerDocumentsSignes(){
   document.addEventListener('click', e=>{
     const a = e.target.closest && e.target.closest('a[href]');
     if(!a) return;
-    const href = a.getAttribute('href');
+    // Adresse d'origine (publique) du document, même si le lien affiché a déjà été converti
+    // en lien signé : c'est elle qui sert à le récupérer (même chemin que le bouton 👁️).
+    const href = a.dataset.urlOrigine || a.getAttribute('href');
     const publique = RE_URL_PUBLIQUE.test(href);
-    // PDF : affiché depuis une copie locale (voir pdfEnLocal), sinon le navigateur le
-    // télécharge — y compris quand le lien a déjà été converti en lien signé (/object/sign/).
-    const pdf = /\.pdf($|[?#])/i.test(href) && (publique || /\/storage\/v1\/object\/sign\//.test(href));
-    if(!publique && !pdf) return;
+    if(!publique) return;
     e.preventDefault();
+    // PDF (factures, constats…) : ouvert dans la fenêtre d'aperçu du logiciel, depuis une
+    // copie locale (pdfEnLocal) — sinon le navigateur propose de le télécharger.
+    if(/\.pdf($|[?#])/i.test(href)){
+      const nom = decodeURIComponent(href.split('?')[0].split('/').pop() || 'Document.pdf').replace(/^[A-Za-z0-9]+_\d{10,}_/, '');
+      openDocPreview(href, nom);
+      return;
+    }
     const w = window.open('', '_blank');
-    const ouvrir = pdf ? pdfEnLocal(href) : urlSignee(href);
+    const ouvrir = urlSignee(href);
     ouvrir.then(u=>{ if(w) w.location = u; else location.href = u; }).catch(()=>{ if(w) w.close(); showToast('Impossible d\'ouvrir le document (connexion ?).'); });
   }, true);
 }
