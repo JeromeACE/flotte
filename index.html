@@ -1164,6 +1164,27 @@ footer.appfoot{text-align:center;font-size:11.5px;color:#9ca3af;padding:20px;}
     <div id="comptesListe" style="overflow:auto;"></div>
   </div>
 
+  <!-- Journal des modifications (2026-10-20) : écrit par le serveur lui-même (déclencheur
+       journal_app_state, voir securite/03_journal_modifications.sql), lu ici par renderJournal. -->
+  <div class="section" id="sectionJournal">
+    <h2>🕵️ Journal des modifications</h2>
+    <p style="font-size:13px;color:#4b5563;">Chaque enregistrement fait dans le logiciel est noté automatiquement par le serveur : qui (compte connecté), quand, quelle fiche et, pour une modification, l'ancienne et la nouvelle valeur. Personne ne peut modifier ni effacer ce journal depuis le logiciel. Les codes d'accès apparaissent masqués.</p>
+    <div class="toolbar">
+      <select id="jmPeriode" title="Période">
+        <option value="1">Aujourd'hui</option>
+        <option value="7" selected>7 derniers jours</option>
+        <option value="30">30 derniers jours</option>
+        <option value="365">12 derniers mois</option>
+      </select>
+      <select id="jmPersonne" title="Personne"><option value="">Toutes les personnes</option></select>
+      <select id="jmCollection" title="Partie du logiciel"><option value="">Toutes les parties</option></select>
+      <select id="jmAmbulance" title="Ambulance"><option value="">Toutes les ambulances</option></select>
+      <button type="button" class="btn btn-outline btn-sm" id="btnJmActualiser">🔄 Actualiser</button>
+    </div>
+    <div id="jmEtat" style="font-size:13px;margin:6px 0;"></div>
+    <div id="jmListe" style="overflow:auto;"></div>
+  </div>
+
   <div class="section">
     <h2>🖥️ Borne en centrale</h2>
     <p style="font-size:13px;color:#4b5563;">Pour installer l'application sur l'écran d'une centrale : définissez d'abord le code borne, puis, <b>sur le poste de la centrale</b>, cliquez sur « Verrouiller ce poste en borne ». Le poste reste alors en affichage borne, même après un rechargement ou un redémarrage : les accès gestion et direction sont masqués, le mode collaborateur reste disponible (retour automatique en mode borne après 3 minutes sans activité). Pour déverrouiller : bouton « 🔒 Borne » en haut, puis le code borne ou le code gestion.</p>
@@ -3649,6 +3670,129 @@ document.getElementById('btnSaveCompte').onclick = async () => {
   }
 };
 document.querySelector('nav.tabs button[data-view="reglages"]').addEventListener('click', ()=>setTimeout(renderComptes, 0));
+
+/* ---------- Journal des modifications (2026-10-20) ----------
+   Écrit par le serveur (déclencheur journal_app_state sur app_state, voir
+   securite/03_journal_modifications.sql) à chaque enregistrement : une ligne par fiche
+   ajoutée / modifiée / supprimée, avec l'auteur (compte connecté) et, pour une
+   modification, chaque champ { avant, apres } (pour une liste : éléments retirés /
+   ajoutés, liste:true). Lecture réservée à la gestion (RLS) ; filtres appliqués ici. */
+const JM_COLLECTIONS = {
+  vehicules:'Véhicules', travaux:'Travaux / signalements', prets:'Prêts', sinistres:'Sinistres',
+  factures:'Factures', prestataires:'Prestataires', personnel:'Personnel', releves_km:'Relevés km',
+  materiel_assets:'Fiches matériel', materiel_incidents:'Incidents matériel', carrosserie_photos:'Carrosserie',
+  board_messages:'Messages État de la flotte', suggestions:'Propositions', reglages:'Réglages'
+};
+const JM_CHAMPS = {
+  ambulance:'Ambulance', etat:'État', dossier:'Dossier', travaux:'Description', cout_chf:'Coût CHF',
+  date_debut:'Date de début', date_fin:'Date de fin', heure_debut:'Heure de début', heure_fin:'Heure de fin',
+  prestataire:'Prestataire', commentaires:'Commentaires', commentaire:'Commentaire', echeances:'Échéances',
+  equipement:'Contrôles', km:'Km', km_date:'Date du km', par:'Par', montant:'Montant', numero_facture:'N° de facture',
+  date_facture:'Date de facture', statut:'Statut', sinistre_statut:'Statut', roulant:'Peut rouler',
+  immobilise:'Immobilisé', vehicule_actuel:'Rattachement', date_dernier:'Dernier contrôle',
+  date_prochain:'Prochain contrôle', numero_serie:'N° de série', cadre_garde_accord:'Accord du cadre',
+  cadres_garde:'Cadres de garde', adminPinHash:'Code gestion', bornePinHash:'Code borne',
+  directionPinHash:'Code direction', directionOpPinHash:'Code direction opérationnelle'
+};
+let jmLignes = [];
+function jmChamp(k){
+  if(JM_CHAMPS[k]) return JM_CHAMPS[k];
+  const t = String(k).replace(/_/g,' ');
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+function jmValeur(v){
+  if(v===null || v===undefined || v==='') return '(vide)';
+  if(typeof v==='boolean') return v ? 'oui' : 'non';
+  if(typeof v==='string') return /^\d{4}-\d{2}-\d{2}$/.test(v) ? fmtDate(v) : (v.length>200 ? v.slice(0,200)+'…' : v);
+  if(Array.isArray(v)) return v.length ? v.map(jmValeur).join(', ') : '(vide)';
+  if(typeof v==='object'){
+    const parts = Object.entries(v).filter(([k,x])=>k!=='id' && x!==null && x!=='' && !(Array.isArray(x)&&!x.length)).map(([k,x])=>jmValeur(x));
+    const t = parts.join(' · ');
+    return t.length>200 ? t.slice(0,200)+'…' : (t || '(vide)');
+  }
+  return String(v);
+}
+function jmDetail(l){
+  const champs = l.champs || {};
+  if(l.action!=='modification'){
+    const entrees = Object.entries(champs);
+    if(!entrees.length) return '';
+    return `<details><summary style="cursor:pointer;color:var(--grey);">${entrees.length} champ(s)</summary>`
+      + entrees.map(([k,v])=>`<div><b>${escapeHtml(jmChamp(k))}</b> : ${escapeHtml(jmValeur(v))}</div>`).join('') + '</details>';
+  }
+  return Object.entries(champs).map(([k,d])=>{
+    d = d || {};
+    if(d.liste){
+      const av = (d.avant||[]), ap = (d.apres||[]);
+      return `<div><b>${escapeHtml(jmChamp(k))}</b> : `
+        + (av.length ? `<span style="color:#b91c1c;">avant ${escapeHtml(av.map(jmValeur).join(' ; '))}</span>` : '')
+        + (av.length && ap.length ? ' → ' : '')
+        + (ap.length ? `<span style="color:#15803d;">${av.length?'':'ajouté '}${escapeHtml(ap.map(jmValeur).join(' ; '))}</span>` : '')
+        + '</div>';
+    }
+    return `<div><b>${escapeHtml(jmChamp(k))}</b> : <span style="color:#b91c1c;">${escapeHtml(jmValeur(d.avant))}</span> → <span style="color:#15803d;">${escapeHtml(jmValeur(d.apres))}</span></div>`;
+  }).join('');
+}
+function jmRemplirFiltre(id, valeurs, libelle){
+  const sel = document.getElementById(id);
+  const actuel = sel.value;
+  const premier = sel.options[0].outerHTML;
+  sel.innerHTML = premier + [...valeurs].sort((a,b)=>libelle(a).localeCompare(libelle(b),'fr'))
+    .map(v=>`<option value="${escapeHtml(v)}">${escapeHtml(libelle(v))}</option>`).join('');
+  sel.value = valeurs.has(actuel) ? actuel : '';
+}
+function afficherJournal(){
+  const el = document.getElementById('jmListe');
+  const personne = document.getElementById('jmPersonne').value;
+  const coll = document.getElementById('jmCollection').value;
+  const amb = document.getElementById('jmAmbulance').value;
+  const lignes = jmLignes.filter(l=>(!personne || l.auteur===personne) && (!coll || l.collection===coll) && (!amb || l.ambulance===amb));
+  const icone = {ajout:'<span style="color:#15803d;">➕ Ajout</span>', modification:'✏️ Modification', suppression:'<span style="color:#b91c1c;">🗑️ Suppression</span>'};
+  el.innerHTML = lignes.length ? `<table><thead><tr><th>Date</th><th>Qui</th><th>Partie</th><th>Fiche</th><th>Changement</th></tr></thead><tbody>`
+    + lignes.map(l=>`<tr>
+        <td style="white-space:nowrap;">${new Date(l.quand).toLocaleString('fr-CH',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}</td>
+        <td>${escapeHtml(l.auteur||'—')}${l.role ? `<div class="meq-par">${escapeHtml(ROLES_COMPTES[l.role]||l.role)}</div>` : ''}</td>
+        <td>${escapeHtml(JM_COLLECTIONS[l.collection]||l.collection)}</td>
+        <td>${escapeHtml(l.collection==='reglages' ? jmChamp(l.libelle||l.element_id||'') : String(l.libelle||l.element_id||'').replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, '$3.$2.$1'))}${l.ambulance && l.collection!=='vehicules' ? `<div class="meq-par">${escapeHtml(l.ambulance)}</div>` : ''}</td>
+        <td style="font-size:12.5px;min-width:260px;">${icone[l.action]||escapeHtml(l.action)}${jmDetail(l)}</td>
+      </tr>`).join('') + '</tbody></table>'
+    : '<div class="empty">Aucune modification pour ces critères.</div>';
+}
+async function renderJournal(){
+  const etat = document.getElementById('jmEtat');
+  const el = document.getElementById('jmListe');
+  if(!etat || !el) return;
+  if(!supa || !modeComptes || !isGestion){
+    etat.textContent = 'Réservé au compte de gestion connecté.';
+    el.innerHTML = ''; jmLignes = [];
+    return;
+  }
+  const jours = Number(document.getElementById('jmPeriode').value) || 7;
+  const depuis = new Date(); depuis.setHours(0,0,0,0); depuis.setDate(depuis.getDate() - (jours-1));
+  etat.textContent = 'Chargement du journal…';
+  const {data, error} = await supa.from('journal_modifications')
+    .select('id,quand,auteur,role,collection,element_id,libelle,ambulance,action,champs')
+    .gte('quand', depuis.toISOString()).order('quand', {ascending:false}).order('id', {ascending:false}).limit(1000);
+  if(error){
+    etat.textContent = /does not exist|schema cache/i.test(error.message||'')
+      ? 'Le journal n\'est pas encore activé sur le serveur (securite/03_journal_modifications.sql).'
+      : 'Lecture du journal impossible : ' + error.message;
+    el.innerHTML = ''; jmLignes = [];
+    return;
+  }
+  jmLignes = data || [];
+  etat.textContent = jmLignes.length >= 1000
+    ? '1000 modifications les plus récentes affichées — réduisez la période pour remonter plus loin.'
+    : `${jmLignes.length} modification(s) sur la période.`;
+  jmRemplirFiltre('jmPersonne', new Set(jmLignes.map(l=>l.auteur).filter(Boolean)), v=>v);
+  jmRemplirFiltre('jmCollection', new Set(jmLignes.map(l=>l.collection)), v=>JM_COLLECTIONS[v]||v);
+  jmRemplirFiltre('jmAmbulance', new Set(jmLignes.map(l=>l.ambulance).filter(Boolean)), v=>v);
+  afficherJournal();
+}
+['jmPersonne','jmCollection','jmAmbulance'].forEach(id=>document.getElementById(id).addEventListener('change', afficherJournal));
+document.getElementById('jmPeriode').addEventListener('change', renderJournal);
+document.getElementById('btnJmActualiser').addEventListener('click', renderJournal);
+document.querySelector('nav.tabs button[data-view="reglages"]').addEventListener('click', ()=>setTimeout(renderJournal, 0));
 
 /* ---------- Modales ---------- */
 function openModal(id){ document.getElementById(id).classList.add('open'); }
@@ -12074,6 +12218,7 @@ const AIDE_FICHES = [
   {titre:'Proposer une amélioration', q:['j ai une idee','proposer une amelioration','suggestion','il manque quelque chose','ce serait pratique'], mots:'idee proposition proposer amelioration ameliorer suggestion suggerer manque pratique evolution remarque', r:'Onglet <b>Aide</b>, partie « 💡 Proposer une amélioration » : votre nom, la partie du logiciel concernée, votre idée, puis « Envoyer la proposition ». Le responsable de flotte la reçoit aussitôt et la suit (à l\'étude, retenue, réalisée…).', vue:'aide'},
   {titre:'Se connecter', q:['comment me connecter','mot de passe oublie','je n arrive pas a me connecter','se deconnecter'], mots:'connexion connecter compte mot passe oublie identifiant email deconnecter', r:'Bouton « 🔑 Se connecter » en haut (s\'il est affiché), puis votre adresse e-mail et votre mot de passe. Mot de passe oublié ou compte bloqué : contactez le responsable de flotte, qui peut le réinitialiser. Pour quitter un poste partagé : « 🚪 Se déconnecter » en haut.', guide:'ouvrir'},
   {titre:'Comptes utilisateurs', q:['ajouter un utilisateur','creer un compte','changer le role d un compte','retirer l acces'], mots:'compte utilisateur ajouter creer role desactiver acces nouveau employe depart', r:'Ajout : Supabase → Authentication → Users → « Add user » (e-mail, mot de passe, « Auto Confirm User » coché). Puis dans l\'application : <b>Réglages</b> → « Comptes utilisateurs » → choisir le rôle (Gestion, Direction, Direction opérationnelle, Collaborateur, Borne) et le nom → « Enregistrer ». Décocher « Actif » retire immédiatement l\'accès.', vue:'reglages', guide:'profils'},
+  {titre:'Journal des modifications', q:['qui a modifie','qui a supprime','historique des modifications','voir les changements'], mots:'journal historique modification modifie supprime qui trace changement avant apres audit', r:'<b>Réglages</b> → « Journal des modifications » (compte de gestion uniquement) : chaque enregistrement est noté par le serveur — date, personne, partie du logiciel, fiche, et pour une modification l\'ancienne valeur (en rouge) et la nouvelle (en vert). Filtres par période, personne, partie et ambulance. Le journal ne peut être ni modifié ni effacé depuis le logiciel.', vue:'reglages', guide:'profils'},
   {titre:'Installer une borne en centrale', q:['installer la borne','verrouiller l ecran en centrale','deverrouiller la borne','code borne'], mots:'installer verrouiller deverrouiller borne code ecran centrale poste', r:'Mode gestion → <b>Réglages</b> → « Borne en centrale » : définissez le code borne, puis, <b>sur le poste de la centrale</b>, « Verrouiller ce poste en borne ». Le poste reste en affichage borne (gestion et direction masquées), même après redémarrage ; le mode collaborateur revient seul en borne après 3 minutes sans activité. Pour déverrouiller : bouton « 🔒 Borne », puis le code borne ou le code gestion.', vue:'reglages', guide:'ouvrir'},
   {titre:'Plein écran sur la borne', q:['plein ecran','affichage borne'], mots:'plein ecran borne affichage centrale tactile', r:'Bouton « Plein écran » en haut de l\'État de la flotte. La borne se met à jour toute seule et se recharge chaque nuit.', vue:'board', guide:'ouvrir'},
   {titre:'Contact', q:['qui contacter','j ai une question','signaler un bug','demande d amelioration'], mots:'contact question bug erreur amelioration responsable aide joindre', r:'Le responsable de flotte, <b>Jérôme Dujoux</b>, pour toute question, erreur ou demande d\'amélioration.', guide:'depannage'},
