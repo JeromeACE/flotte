@@ -2169,9 +2169,10 @@ function personnelSelectValue(selId, autreId){
 // Réinitialise le menu déroulant "Nom" à l'ouverture d'un formulaire : sélectionne la
 // personne si son nom complet correspond exactement à une entrée connue, bascule sur
 // la saisie libre sinon (valeur existante mais pas dans la liste, ou vide).
-function resetPersonnelSelect(selId, autreId, value){
+function resetPersonnelSelect(selId, autreId, value, preRemplir){
   // Compte connecté (hors borne) : le nom du déclarant est pré-rempli.
-  if(!value && modeComptes && profilRole && profilRole !== 'borne') value = profilNom;
+  // Pas sur une fiche existante (preRemplir === false) : un déclarant vide y reste vide.
+  if(!value && preRemplir !== false && modeComptes && profilRole && profilRole !== 'borne') value = profilNom;
   document.getElementById(selId).innerHTML = personnelNomOptions(value||'');
   const known = value && (state.personnel||PERSONNEL_LIST).some(p=>personnelFullName(p)===value);
   const isAutre = !!value && !known;
@@ -8664,7 +8665,7 @@ function editTravail(id, presets){
   trCadreSel.value = trCadre;
   syncTrAccordCadre();
   document.getElementById('fTrAlerteBoard').checked = !!t.alerte_board;
-  resetPersonnelSelect('fTrDeclarant','fTrDeclarantAutre', t.declarant || '');
+  resetPersonnelSelect('fTrDeclarant','fTrDeclarantAutre', t.declarant || '', !id);
   document.getElementById('fTrKm').value = t.km!=null ? t.km : '';
   document.getElementById('fTrGarantie').value = t.garantie || '';
   document.getElementById('fTrPriseRdv').value = t.prise_rdv || '';
@@ -9076,7 +9077,7 @@ function openTicketModal(presetVeh, presetType, editId){
     document.getElementById('fTkElementAutre').classList.toggle('hidden', knownEl);
     if(!knownEl) document.getElementById('fTkElementAutre').value = t.element_concerne;
   }
-  resetPersonnelSelect('fTkNom','fTkNomAutre', t ? (t.declarant||'') : '');
+  resetPersonnelSelect('fTkNom','fTkNomAutre', t ? (t.declarant||'') : '', !t);
   document.getElementById('fTkEmail').value = t ? (t.declarant_email||'') : '';
   document.getElementById('modalTicketTitle').textContent = t ? '✏️ Modifier mon signalement' : '🔧 Signaler une panne / un problème véhicule';
   document.getElementById('btnSendTicket').textContent = t ? 'Enregistrer les modifications' : 'Envoyer le signalement';
@@ -9355,7 +9356,7 @@ function openDeclarationImpactModal(presetVeh, editId){
   document.getElementById('fDiAmbLockNote').classList.toggle('hidden', !vehVerrouille);
   document.getElementById('fDiVue').value = t ? (t.vue_carrosserie || 'Autre') : 'Autre';
   document.getElementById('fDiDescription').value = t ? (t.travaux||'') : '';
-  resetPersonnelSelect('fDiNom','fDiNomAutre', t ? (t.declarant||'') : '');
+  resetPersonnelSelect('fDiNom','fDiNomAutre', t ? (t.declarant||'') : '', !t);
   document.getElementById('fDiEmail').value = t ? (t.declarant_email||'') : '';
   diSelectedFiles = [];
   renderDiFichiersListe();
@@ -10915,6 +10916,14 @@ async function processInvoiceFile(file, statusEl){
 // (les deux si les deux liens existent). `onlyIfEmpty` protège les montants déjà
 // saisis lors d'un rattachement automatique ; l'enregistrement manuel (bouton
 // "Enregistrer" de la facture), lui, applique toujours la valeur confirmée.
+// 2026-10-20 : le montant reporté est le TOTAL des factures liées à la fiche (avant :
+// le montant de la seule facture enregistrée, qui écrasait celui des autres — ex.
+// intervention avec deux factures Reskue 356,75 + 25,95 ramenée à 25,95).
+function totalFacturesLiees(champ, id){
+  const liees = (state.factures||[]).filter(x=>x[champ]===id && x.montant!=null && x.montant!=='');
+  if(!liees.length) return null;
+  return Math.round(liees.reduce((s,x)=>s+(Number(x.montant)||0), 0)*100)/100;
+}
 function applyFactureMontantToLinkedRecord(f, opts){
   opts = opts || {};
   if(f.montant == null) return false;
@@ -10922,14 +10931,14 @@ function applyFactureMontantToLinkedRecord(f, opts){
   if(f.travaux_id){
     const t = state.travaux.find(x=>x.id===f.travaux_id);
     if(t && (!opts.onlyIfEmpty || t.cout_chf == null)){
-      t.cout_chf = f.montant;
+      t.cout_chf = totalFacturesLiees('travaux_id', t.id);
       changed = true;
     }
   }
   if(f.sinistre_id){
     const s = state.sinistres.find(x=>x.id===f.sinistre_id);
     if(s && (!opts.onlyIfEmpty || s.cout_reparation == null)){
-      s.cout_reparation = f.montant;
+      s.cout_reparation = totalFacturesLiees('sinistre_id', s.id);
       changed = true;
     }
   }
@@ -10938,7 +10947,7 @@ function applyFactureMontantToLinkedRecord(f, opts){
   if(f.materiel_incident_id){
     const m = (state.materiel_incidents||[]).find(x=>x.id===f.materiel_incident_id);
     if(m && (!opts.onlyIfEmpty || m.cout_chf == null)){
-      m.cout_chf = f.montant;
+      m.cout_chf = totalFacturesLiees('materiel_incident_id', m.id);
       changed = true;
     }
   }
@@ -11246,15 +11255,15 @@ document.getElementById('btnSaveFacture').onclick = async () => {
   // manuel indépendant à préserver sur une fiche encore liée à cette facture.
   if(before.travaux_id && before.travaux_id !== newVals.travaux_id){
     const oldT = state.travaux.find(x=>x.id===before.travaux_id);
-    if(oldT) oldT.cout_chf = null;
+    if(oldT) oldT.cout_chf = totalFacturesLiees('travaux_id', oldT.id);
   }
   if(before.sinistre_id && before.sinistre_id !== newVals.sinistre_id){
     const oldS = state.sinistres.find(x=>x.id===before.sinistre_id);
-    if(oldS) oldS.cout_reparation = null;
+    if(oldS) oldS.cout_reparation = totalFacturesLiees('sinistre_id', oldS.id);
   }
   if(before.materiel_incident_id && before.materiel_incident_id !== newVals.materiel_incident_id){
     const oldM = (state.materiel_incidents||[]).find(x=>x.id===before.materiel_incident_id);
-    if(oldM) oldM.cout_chf = null;
+    if(oldM) oldM.cout_chf = totalFacturesLiees('materiel_incident_id', oldM.id);
   }
   // Enregistrement manuel confirmé par l'utilisateur : le montant remplace
   // toujours celui de la fiche nouvellement liée (travaux et/ou sinistre).
