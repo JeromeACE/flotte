@@ -460,6 +460,8 @@ body.board-fullscreen main{padding:14px;max-width:none;}
 .doc-row a, .doc-row span{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;word-break:break-word;}
 .doc-row .icon-btn{flex:0 0 auto;}
 .doc-preview-frame{width:100%;height:70vh;border:1px solid var(--border);border-radius:8px;background:#f1f5f9;}
+.doc-preview-pages{height:70vh;overflow:auto;border:1px solid var(--border);border-radius:8px;background:#e5e7eb;padding:8px;display:flex;flex-direction:column;gap:8px;}
+.doc-preview-page{width:100%;height:auto;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);}
 .doc-preview-img{max-width:100%;max-height:70vh;display:block;margin:0 auto;border-radius:8px;}
 footer.appfoot{text-align:center;font-size:11.5px;color:#9ca3af;padding:20px;}
 .hidden{display:none !important;}
@@ -2306,15 +2308,42 @@ function escapeHtml(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'
 // un nouvel onglet". Utilisé notamment pour les rapports de police / constats amiables
 // joints à un dossier de sinistre.
 // Copie locale d'un PDF (lien signé si besoin), gardée le temps de la session.
-const cachePdfLocal = new Map();
-async function pdfEnLocal(url){
-  if(cachePdfLocal.has(url)) return cachePdfLocal.get(url);
+const cachePdfLocal = new Map(), cachePdfOctets = new Map();
+async function pdfOctets(url){
+  if(cachePdfOctets.has(url)) return cachePdfOctets.get(url);
   const signee = typeof urlSignee === 'function' ? await urlSignee(url) : url;
   const rep = await fetch(signee);
   if(!rep.ok) throw new Error('HTTP ' + rep.status);
-  const local = URL.createObjectURL(new Blob([await rep.arrayBuffer()], {type:'application/pdf'}));
+  const octets = await rep.arrayBuffer();
+  cachePdfOctets.set(url, octets);
+  return octets;
+}
+async function pdfEnLocal(url){
+  if(cachePdfLocal.has(url)) return cachePdfLocal.get(url);
+  const local = URL.createObjectURL(new Blob([await pdfOctets(url)], {type:'application/pdf'}));
   cachePdfLocal.set(url, local);
   return local;
+}
+// Dessine les pages d'un PDF dans la fenêtre d'aperçu avec pdf.js (2026-10-20) : le
+// lecteur PDF intégré des navigateurs manque sur certains appareils (tablettes, bornes,
+// navigateur intégré) et la zone restait grise. 30 pages au plus ; le PDF complet reste
+// disponible par « Ouvrir dans un nouvel onglet ».
+async function dessinerPdf(conteneur, octets){
+  const pdf = await pdfjsLib.getDocument({data: octets.slice(0)}).promise;
+  conteneur.innerHTML = '';
+  const largeur = Math.max(320, conteneur.clientWidth - 4);
+  for(let n = 1; n <= Math.min(pdf.numPages, 30); n++){
+    const page = await pdf.getPage(n);
+    const base = page.getViewport({scale: 1});
+    const echelle = (largeur / base.width) * (window.devicePixelRatio || 1);
+    const vue = page.getViewport({scale: echelle});
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.floor(vue.width); canvas.height = Math.floor(vue.height);
+    canvas.className = 'doc-preview-page';
+    conteneur.appendChild(canvas);
+    await page.render({canvasContext: canvas.getContext('2d'), viewport: vue}).promise;
+  }
+  if(pdf.numPages > 30) conteneur.insertAdjacentHTML('beforeend', `<div class="empty">… ${pdf.numPages - 30} page(s) de plus : « Ouvrir dans un nouvel onglet ».</div>`);
 }
 function openDocPreview(url, filename){
   document.getElementById('docPreviewTitle').textContent = filename || 'Document';
@@ -2330,10 +2359,15 @@ function openDocPreview(url, filename){
     // protection qui empêche le navigateur d'afficher le PDF (il propose de le télécharger).
     // On récupère donc le fichier puis on l'affiche depuis une copie locale (lien « blob »).
     body.innerHTML = '<div class="empty">Chargement du document…</div>';
-    pdfEnLocal(url).then(local=>{
+    pdfEnLocal(url).then(async local=>{
       if(!document.getElementById('modalDocPreview').classList.contains('open')) return;
-      body.innerHTML = `<iframe class="doc-preview-frame" src="${local}" title="${escapeHtml(filename||'')}"></iframe>`;
       document.getElementById('docPreviewOpenNewTab').href = local;
+      if(window.pdfjsLib){
+        body.innerHTML = '<div class="doc-preview-pages"></div>';
+        await dessinerPdf(body.firstChild, await pdfOctets(url));
+      } else {
+        body.innerHTML = `<iframe class="doc-preview-frame" src="${local}" title="${escapeHtml(filename||'')}"></iframe>`;
+      }
     }).catch(err=>{ body.innerHTML = `<div class="empty">Impossible de charger le document (connexion ?). Réessayez.<br><span style="font-size:11px;color:var(--grey);">Détail : ${escapeHtml(String(err && err.message || err))}</span></div>`; });
   } else {
     body.innerHTML = '<div class="empty">Aperçu non disponible pour ce type de fichier — utilisez « Ouvrir dans un nouvel onglet ».</div>';

@@ -1,2 +1,2 @@
-Préparé le 20.10.2026 17:41
-Dernier enregistrement : 0b7548f 20.10.2026 17:40 Factures : ┬½ Voir ┬╗ ouvre le PDF dans l'aper├ºu, comme les constats
+Préparé le 20.10.2026 17:50
+Dernier enregistrement : 2ded277 20.10.2026 17:47 PDF : pages des factures et constats dessin├®es par le logiciel (pdf.js)
