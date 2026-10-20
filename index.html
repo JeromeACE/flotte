@@ -3451,12 +3451,16 @@ function activerDocumentsSignes(){
   // par le navigateur) puis on y charge le lien signé.
   document.addEventListener('click', e=>{
     const a = e.target.closest && e.target.closest('a[href]');
-    if(!a || !RE_URL_PUBLIQUE.test(a.getAttribute('href'))) return;
+    if(!a) return;
+    const href = a.getAttribute('href');
+    const publique = RE_URL_PUBLIQUE.test(href);
+    // PDF : affiché depuis une copie locale (voir pdfEnLocal), sinon le navigateur le
+    // télécharge — y compris quand le lien a déjà été converti en lien signé (/object/sign/).
+    const pdf = /\.pdf($|[?#])/i.test(href) && (publique || /\/storage\/v1\/object\/sign\//.test(href));
+    if(!publique && !pdf) return;
     e.preventDefault();
     const w = window.open('', '_blank');
-    const href = a.getAttribute('href');
-    // PDF : affiché depuis une copie locale (voir pdfEnLocal), sinon le navigateur le télécharge.
-    const ouvrir = /\.pdf($|[?#])/i.test(href) ? pdfEnLocal(href) : urlSignee(href);
+    const ouvrir = pdf ? pdfEnLocal(href) : urlSignee(href);
     ouvrir.then(u=>{ if(w) w.location = u; else location.href = u; }).catch(()=>{ if(w) w.close(); showToast('Impossible d\'ouvrir le document (connexion ?).'); });
   }, true);
 }
