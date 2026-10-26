@@ -1,2 +1,2 @@
-Préparé le 26.10.2026 15:20
-Dernier enregistrement : 5abe3a8 26.10.2026 15:00 Enregistrement automatique 2026-10-26 15:00 : backups/_journal_sauvegarde.log, backups/app_state_2026-10-26_144619.json
+Préparé le 26.10.2026 16:20
+Dernier enregistrement : 206fbcc 26.10.2026 16:16 Corrections de l'analyse : factures et preuves prot├®g├®es, cl├┤ture auto par la base, session expir├®e, photos r├®duites

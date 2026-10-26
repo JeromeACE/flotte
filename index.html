@@ -3051,6 +3051,25 @@ async function executerOperation(op, ctx){
   }
 }
 const LIBELLES_TABLES = {vehicules:'véhicules', travaux:'travaux et signalements', prets:'prêts', sinistres:'sinistres', prestataires:'prestataires', factures:'factures', carrosserie_photos:'carrosserie', materiel_incidents:'incidents matériel', releves_km:'relevés km', materiel_assets:'fiches matériel', personnel:'personnel', board_messages:'messages de l\'État de la flotte', suggestions:'propositions', direction_activity_log:'journal direction', reglages:'réglages'};
+async function sessionActive(){
+  try{ const {data} = await supa.auth.getSession(); return !!(data && data.session); }catch(e){ return false; }
+}
+let sessionExpireeSignalee = false;
+function signalerSessionExpiree(){
+  setSaveError(true);
+  if(sessionExpireeSignalee) return;
+  sessionExpireeSignalee = true;
+  afficherEcranConnexion('Votre connexion a expiré. Reconnectez-vous : vos modifications en attente seront enregistrées tout de suite après.', false);
+}
+// Reconnexion en cours d'utilisation, avec le même compte : on reprend sans recharger la
+// page (la saisie en attente serait perdue au rechargement).
+function reprendreApresReconnexion(){
+  sessionExpireeSignalee = false;
+  document.getElementById('ecranConnexion').classList.add('hidden');
+  subscribeRealtime();
+  pushState('Après reconnexion').then(()=>resyncFromServer());
+  showToast('✅ Reconnecté : enregistrement de vos modifications en attente…');
+}
 async function pushStateNow(actionLabel){
   state.updated_at = new Date().toISOString();
   if((isDirection || isDirectionOp) && directionSigner) logDirectionActivity(actionLabel);
@@ -3062,6 +3081,10 @@ async function pushStateNow(actionLabel){
     return;
   }
   if(!supa) return;
+  // Session expirée (2026-10-26) : sans cette vérification, la base répondait « refusé »
+  // et la saisie était annulée avec un message trompeur. On garde la saisie, on demande
+  // de se reconnecter, et l'enregistrement repart après la reconnexion (sans rechargement).
+  if(modeComptes && !(await sessionActive())){ signalerSessionExpiree(); return; }
   pushInFlight = true;
   try{
     if(lastServerVehiculeCount > 0 && !(state.vehicules||[]).length){
@@ -3582,6 +3605,11 @@ document.getElementById('formConnexion').addEventListener('submit', async e=>{
     const {error} = await creerClientSupabase().auth.signInWithPassword({email, password: mdp});
     if(error){
       document.getElementById('cnxMsg').textContent = /invalid/i.test(error.message||'') ? 'E-mail ou mot de passe incorrect.' : 'Connexion impossible : ' + error.message;
+      return;
+    }
+    // Session expirée puis reconnexion avec le même compte : on reprend sans recharger.
+    if(sessionExpireeSignalee && serverLoaded && supa && profilEmail && email.toLowerCase() === profilEmail){
+      reprendreApresReconnexion();
       return;
     }
     location.reload();
@@ -7709,11 +7737,34 @@ function renderCarroLegend(){
     '<span><span class="badge badge-grey">●</span> connu — déjà répertorié</span>';
 }
 
+// Photos réduites avant envoi (2026-10-26) : une photo de téléphone (3 à 6 Mo) devient une
+// image JPEG d'au plus 1920 px de côté (environ 300 Ko), largement suffisante pour un constat
+// ou un impact, plus rapide à envoyer en mobilité et 10 à 20 fois moins lourde dans le
+// stockage (1 Go en offre gratuite). Les PDF et les petites images sont envoyés tels quels ;
+// en cas d'échec de la réduction (format non lu par le navigateur), l'original est envoyé.
+// Les impacts de carrosserie sont placés en pourcentage de l'image : la réduction (même
+// proportions) ne les déplace pas.
+async function compresserImage(file){
+  try{
+    if(!file || !/^image\/(jpeg|png|webp|heic|heif)$/i.test(file.type||'') || file.size < 500*1024) return file;
+    const url = URL.createObjectURL(file);
+    const img = await new Promise((ok, ko)=>{ const i = new Image(); i.onload = ()=>ok(i); i.onerror = ko; i.src = url; });
+    URL.revokeObjectURL(url);
+    const max = 1920, ratio = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.round(img.naturalWidth * ratio), h = Math.round(img.naturalHeight * ratio);
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    c.getContext('2d').drawImage(img, 0, 0, w, h);
+    const blob = await new Promise(ok=>c.toBlob(ok, 'image/jpeg', 0.82));
+    if(!blob || blob.size >= file.size) return file;
+    return new File([blob], file.name.replace(/\.[a-z0-9]+$/i, '') + '.jpg', {type:'image/jpeg', lastModified: Date.now()});
+  }catch(e){ console.warn('réduction de la photo impossible, original envoyé', e); return file; }
+}
 async function uploadCarrosseriePhoto(file, photoId){
+  file = await compresserImage(file);
   if(!supa) return { url: null, path: null };
   try{
     const path = photoId + '_' + Date.now() + '_' + file.name.replace(/[^A-Za-z0-9_.\-]/g,'_');
-    const { error } = await supa.storage.from('carrosserie').upload(path, file, { upsert: true, contentType: file.type || 'image/jpeg' });
+    const { error } = await supa.storage.from('carrosserie').upload(path, file, { upsert: false, contentType: file.type || 'image/jpeg' });
     if(error) throw error;
     const { data } = supa.storage.from('carrosserie').getPublicUrl(path);
     return { url: data.publicUrl, path };
@@ -9042,10 +9093,11 @@ let tkEditingId = null;
    que les photos annotées de l'onglet Carrosserie, préfixées "signalement_" pour ne
    pas se mélanger avec les photos officielles du véhicule). ---- */
 async function uploadTicketPhoto(file, ticketId){
+  file = await compresserImage(file);
   if(!supa) return { id: uid('DOC'), filename: file.name, storage_path: null, file_url: null, uploaded_at: new Date().toISOString() };
   try{
     const path = 'signalement_' + ticketId + '_' + Date.now() + '_' + file.name.replace(/[^A-Za-z0-9_.\-]/g,'_');
-    const { error } = await supa.storage.from('carrosserie').upload(path, file, { upsert: true, contentType: file.type || 'image/jpeg' });
+    const { error } = await supa.storage.from('carrosserie').upload(path, file, { upsert: false, contentType: file.type || 'image/jpeg' });
     if(error) throw error;
     const { data } = supa.storage.from('carrosserie').getPublicUrl(path);
     return { id: uid('DOC'), filename: file.name, storage_path: path, file_url: data.publicUrl, uploaded_at: new Date().toISOString() };
@@ -9059,10 +9111,11 @@ async function uploadTicketPhoto(file, ticketId){
 // par la gestion) — même bucket de stockage 'carrosserie' (déjà ouvert en écriture),
 // simplement préfixé différemment pour ne pas mélanger les chemins de fichiers.
 async function uploadMaterielPhoto(file, incidentId){
+  file = await compresserImage(file);
   if(!supa) return { id: uid('DOC'), filename: file.name, storage_path: null, file_url: null, uploaded_at: new Date().toISOString() };
   try{
     const path = 'materiel_' + incidentId + '_' + Date.now() + '_' + file.name.replace(/[^A-Za-z0-9_.\-]/g,'_');
-    const { error } = await supa.storage.from('carrosserie').upload(path, file, { upsert: true, contentType: file.type || 'application/octet-stream' });
+    const { error } = await supa.storage.from('carrosserie').upload(path, file, { upsert: false, contentType: file.type || 'application/octet-stream' });
     if(error) throw error;
     const { data } = supa.storage.from('carrosserie').getPublicUrl(path);
     return { id: uid('DOC'), filename: file.name, storage_path: path, file_url: data.publicUrl, uploaded_at: new Date().toISOString() };
@@ -9074,10 +9127,11 @@ async function uploadMaterielPhoto(file, incidentId){
 // Même principe que uploadMaterielPhoto/uploadTicketPhoto (même bucket 'carrosserie',
 // préfixe dédié) — documents joints à une fiche Travaux (convocation, devis...).
 async function uploadTravauxDocument(file, travauxId){
+  file = await compresserImage(file);
   if(!supa) return { id: uid('DOC'), filename: file.name, storage_path: null, file_url: null, uploaded_at: new Date().toISOString() };
   try{
     const path = 'travaux_' + travauxId + '_' + Date.now() + '_' + file.name.replace(/[^A-Za-z0-9_.\-]/g,'_');
-    const { error } = await supa.storage.from('carrosserie').upload(path, file, { upsert: true, contentType: file.type || 'application/octet-stream' });
+    const { error } = await supa.storage.from('carrosserie').upload(path, file, { upsert: false, contentType: file.type || 'application/octet-stream' });
     if(error) throw error;
     const { data } = supa.storage.from('carrosserie').getPublicUrl(path);
     return { id: uid('DOC'), filename: file.name, storage_path: path, file_url: data.publicUrl, uploaded_at: new Date().toISOString() };
@@ -9634,10 +9688,11 @@ document.getElementById('btnSendDeclarationImpact').onclick = async () => {
 /* ---------- Déclaration de sinistre par un collaborateur ---------- */
 /* ---- Stockage des documents (Supabase Storage, bucket "sinistres") ---- */
 async function uploadSinistreDocument(file, sinistreId){
+  file = await compresserImage(file);
   if(!supa) return null;
   try{
     const path = sinistreId + '_' + Date.now() + '_' + file.name.replace(/[^A-Za-z0-9_.\-]/g,'_');
-    const { error } = await supa.storage.from('sinistres').upload(path, file, { upsert: true, contentType: file.type || 'application/octet-stream' });
+    const { error } = await supa.storage.from('sinistres').upload(path, file, { upsert: false, contentType: file.type || 'application/octet-stream' });
     if(error) throw error;
     const { data } = supa.storage.from('sinistres').getPublicUrl(path);
     return { id: uid('DOC'), filename: file.name, storage_path: path, file_url: data.publicUrl, uploaded_at: new Date().toISOString() };
@@ -10675,7 +10730,10 @@ function loadTesseract(){
   if(tesseractLoading) return tesseractLoading;
   tesseractLoading = new Promise((resolve, reject) => {
     const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+    // Version figée + empreinte d'intégrité (2026-10-26, comme supabase-js et pdf.js).
+    s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+    s.integrity = 'sha384-GJqSu7vueQ9qN0E9yLPb3Wtpd7OrgK8KmYzC8T1IysG1bcvxvIO4qtYR/D3A991F';
+    s.crossOrigin = 'anonymous';
     s.onload = () => resolve();
     s.onerror = () => reject(new Error('Impossible de charger le module de reconnaissance de texte (OCR).'));
     document.head.appendChild(s);
@@ -11020,7 +11078,7 @@ async function uploadFactureFile(file, factureId){
   if(!supa) return null;
   try{
     const path = factureId + '_' + Date.now() + '_' + file.name.replace(/[^A-Za-z0-9_.\-]/g,'_');
-    const { error } = await supa.storage.from('factures').upload(path, file, { upsert: true, contentType: 'application/pdf' });
+    const { error } = await supa.storage.from('factures').upload(path, file, { upsert: false, contentType: 'application/pdf' });
     if(error) throw error;
     const { data } = supa.storage.from('factures').getPublicUrl(path);
     return { path, url: data.publicUrl };
