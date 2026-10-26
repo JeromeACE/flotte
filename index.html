@@ -2693,18 +2693,20 @@ async function connectSupabase(url, key, opts){
     // jamais créer de données — c'est le cas normal quand la sécurité par comptes est
     // active et que personne n'est connecté (les règles d'accès cachent la ligne).
     const client = opts.client || window.supabase.createClient(url, key);
-    const {data, error} = await client.from('app_state').select('*').eq('key','fleet_data').maybeSingle();
+    // Données par tables (2026-10-26) : tout l'état en une requête (fonction serveur
+    // exporter_etat, qui applique les règles d'accès), avec la version de chaque fiche.
+    const {data, error} = await client.rpc('exporter_etat', {avec_versions: true});
     if(error) throw error;
-    if(!(data && data.value) && opts.pasDeCreation) return 'aucune_donnee';
+    if(!(data && data.etat)){
+      if(opts.pasDeCreation) return 'aucune_donnee';
+      throw new Error('ce compte n\'a pas accès aux données');
+    }
     supa = client;
     serverLoaded = true;
     showLoadError(false);
-    if(data && data.value){
-      state = data.value;
-      markSynced();
-    } else {
-      await pushState();
-    }
+    state = completerEtat(data.etat);
+    versionsServeur = data.versions || {};
+    markSynced();
     config = {url, key};
     saveConfig();
     setSyncStatus(true);
@@ -2720,22 +2722,119 @@ async function connectSupabase(url, key, opts){
     return false;
   }
 }
+/* ---------- Données par tables (2026-10-26) ----------
+   Avant : tout l'état dans UNE ligne (app_state / fleet_data), renvoyée en entier à chaque
+   enregistrement. Désormais une table par sorte de fiche (TABLES_FICHES, une ligne par
+   fiche : id, data = la fiche, version) + la table reglages (cle, valeur) pour le reste
+   (codes, listes simples, marqueurs). Voir securite/04_decoupage_tables.sql.
+   Le logiciel garde `state` en mémoire comme avant (aucun écran ne change) :
+   - au démarrage, exporter_etat() renvoie tout l'état + la version de chaque fiche ;
+   - pushState compare `state` à `baseState` (dernière version connue du serveur) et
+     n'envoie QUE les fiches ajoutées, modifiées ou supprimées (calculerChangements) ;
+   - verrou optimiste PAR FICHE : une modification n'est écrite que si la fiche est encore
+     à la version connue ; sinon relecture de cette seule fiche, fusion champ par champ
+     (mergeItem) et nouvel essai ;
+   - un refus des règles d'accès (rôle sans le droit) annule la modification locale de la
+     fiche concernée (message, sauf pendant les corrections automatiques du démarrage) ;
+   - temps réel : une notification par fiche modifiée (recevoirChangement) ;
+   - resynchronisation : versions_etat() (identifiants + versions seulement), puis
+     lecture des seules fiches qui ont changé. */
+const TABLES_FICHES = ['vehicules','travaux','prets','sinistres','prestataires','factures','carrosserie_photos','materiel_incidents','releves_km','materiel_assets','personnel','board_messages','suggestions','direction_activity_log'];
+let versionsServeur = {};          // { table: { id: version } } ; réglages : { reglages: { cle: version } }
+let pushSilencieux = false;        // corrections automatiques du démarrage : refus sans message
+function versionDe(table, id){ const m = versionsServeur[table]; return m ? m[id] : undefined; }
+function noterVersion(table, id, v){ (versionsServeur[table] = versionsServeur[table] || {})[id] = v; }
+function oublierVersion(table, id){ if(versionsServeur[table]) delete versionsServeur[table][id]; }
+function clesReglages(obj){ return Object.keys(obj||{}).filter(k=>k!=='updated_at' && !TABLES_FICHES.includes(k)); }
+function completerEtat(etat){
+  const s = etat || {};
+  TABLES_FICHES.forEach(t=>{ if(!Array.isArray(s[t])) s[t] = []; });
+  if(!('direction_signers' in s)) s.direction_signers = null;
+  s.updated_at = s.updated_at || new Date().toISOString();
+  return s;
+}
+function trouverFiche(etat, table, id){ return etat && Array.isArray(etat[table]) ? etat[table].find(x=>x && String(x.id)===String(id)) : undefined; }
+function placerFiche(etat, table, id, item){
+  if(!etat) return;
+  if(!Array.isArray(etat[table])) etat[table] = [];
+  const i = etat[table].findIndex(x=>x && String(x.id)===String(id));
+  if(i >= 0) etat[table][i] = item; else etat[table].push(item);
+}
+function retirerFiche(etat, table, id){
+  if(etat && Array.isArray(etat[table])) etat[table] = etat[table].filter(x=>!(x && String(x.id)===String(id)));
+}
+// Instantané des signalements « nouveaux » avant une mise à jour reçue, pour l'alerte sonore.
+function instantaneNouveaux(){
+  return {
+    t: new Set((state.travaux||[]).filter(t=>t.ticket && t.ticket_statut==='nouveau').map(t=>t.id)),
+    m: new Set((state.materiel_incidents||[]).filter(m=>m.declare_par_collaborateur && m.statut==='Nouveau').map(m=>m.id)),
+    s: new Set((state.sinistres||[]).filter(s=>s.declare_par_collaborateur && s.sinistre_statut==='nouveau').map(s=>s.id))
+  };
+}
+let rtInstantane = null, rtMinuteur = null;
+function apresChangementsDistants(){
+  if(!rtInstantane) rtInstantane = instantaneNouveaux();
+  clearTimeout(rtMinuteur);
+  rtMinuteur = setTimeout(()=>{
+    const avant = rtInstantane; rtInstantane = null;
+    lastServerVehiculeCount = (baseState && baseState.vehicules || []).length;
+    saveLocal();
+    renderAll();
+    notifyNewSignalements(avant.t);
+    notifyNewMaterielSignalements(avant.m);
+    notifyNewSinistres(avant.s);
+  }, 150);
+}
+// Une fiche (ou un réglage) reçue du serveur. Ignorée si déjà connue à cette version (écho de
+// notre propre enregistrement) ; fusionnée avec une modification locale en attente.
+function appliquerLigneDistante(table, row){
+  if(!row) return;
+  const id = table === 'reglages' ? row.cle : row.id;
+  const connue = versionDe(table, id);
+  if(connue != null && row.version != null && row.version <= connue) return;
+  if(!rtInstantane) rtInstantane = instantaneNouveaux();
+  if(row.version != null) noterVersion(table, id, row.version);
+  if(table === 'reglages'){
+    if(!baseState || sameJson(baseState[id], state[id])) state[id] = deepClone(row.valeur);
+    if(baseState) baseState[id] = deepClone(row.valeur);
+    return;
+  }
+  const remote = Object.assign({}, row.data, {id: row.id});
+  const b = trouverFiche(baseState, table, id), l = trouverFiche(state, table, id);
+  let nouveau = remote;
+  if(l && !sameJson(b, l)) nouveau = mergeItem(b || {}, l, remote);
+  placerFiche(state, table, id, nouveau);
+  placerFiche(baseState, table, id, deepClone(remote));
+}
+function appliquerSuppressionDistante(table, id){
+  if(id == null) return;
+  if(!rtInstantane) rtInstantane = instantaneNouveaux();
+  oublierVersion(table, id);
+  if(table === 'reglages'){
+    if(!baseState || sameJson(baseState[id], state[id])) delete state[id];
+    if(baseState) delete baseState[id];
+    return;
+  }
+  const b = trouverFiche(baseState, table, id), l = trouverFiche(state, table, id);
+  // Modifiée ici mais supprimée ailleurs : conservée (elle sera recréée au prochain envoi).
+  if(!(l && !sameJson(b, l))) retirerFiche(state, table, id);
+  retirerFiche(baseState, table, id);
+}
+function recevoirChangement(table, p){
+  try{
+    if(p.eventType === 'DELETE') appliquerSuppressionDistante(table, p.old && (table === 'reglages' ? p.old.cle : p.old.id));
+    else appliquerLigneDistante(table, p.new);
+    apresChangementsDistants();
+  }catch(e){ console.error('mise à jour temps réel', e); }
+}
 function subscribeRealtime(){
   if(!supa) return;
   if(realtimeChannel) supa.removeChannel(realtimeChannel);
-  realtimeChannel = supa.channel('app_state_changes')
-    .on('postgres_changes', {event:'*', schema:'public', table:'app_state', filter:'key=eq.fleet_data'}, payload => {
-      if(payload.new && payload.new.value){
-        const previousNewIds = new Set(state.travaux.filter(t=>t.ticket && t.ticket_statut==='nouveau').map(t=>t.id));
-        const previousNewMaterielIds = new Set((state.materiel_incidents||[]).filter(m=>m.declare_par_collaborateur && m.statut==='Nouveau').map(m=>m.id));
-        const previousNewSinistreIds = new Set((state.sinistres||[]).filter(s=>s.declare_par_collaborateur && s.sinistre_statut==='nouveau').map(s=>s.id));
-        applyRemoteState(payload.new.value);
-        renderAll();
-        notifyNewSignalements(previousNewIds);
-        notifyNewMaterielSignalements(previousNewMaterielIds);
-        notifyNewSinistres(previousNewSinistreIds);
-      }
-    }).subscribe();
+  let canal = supa.channel('flotte_tables');
+  TABLES_FICHES.concat(['reglages']).forEach(t=>{
+    canal = canal.on('postgres_changes', {event:'*', schema:'public', table:t}, p=>recevoirChangement(t, p));
+  });
+  realtimeChannel = canal.subscribe();
 }
 // Indicateur "modification non enregistrée sur le serveur".
 // Auparavant, un échec de pushState (coupure réseau, ou erreur renvoyée par Supabase
@@ -2760,40 +2859,26 @@ function setSaveError(failed){
     if(supa) setSyncStatus(true);
   }
 }
-/* ---------- Protection contre l'écrasement entre postes (2026-10-06) ----------
-   Toutes les données tiennent dans une seule ligne : avant, chaque enregistrement
-   renvoyait tout le bloc et écrasait sans le savoir ce qu'un autre poste venait
-   d'enregistrer (cas typique : borne restée ouverte, qui a raté des mises à jour).
-   Désormais :
-   - serverVersion = horodatage (value.updated_at) de la dernière version serveur connue,
-     baseState = copie de cette version. Mis à jour à la lecture, à chaque mise à jour
-     temps réel et après chaque enregistrement réussi (markSynced / applyRemoteState).
-   - pushState n'écrit QUE si le serveur est toujours à serverVersion (filtre sur
-     value->>updated_at). Sinon : relecture, fusion à 3 voies (mergeStates : on réapplique
-     sur la version serveur uniquement ce que CE poste a changé depuis baseState, élément
-     par élément et champ par champ), puis nouvel essai.
-   - Les enregistrements d'un même poste passent l'un après l'autre (pushChain).
-   - resyncFromServer rattrape les mises à jour manquées (toutes les 2 min, retour du
-     réseau, retour sur l'onglet). */
-let serverVersion = null;
+/* ---------- Protection contre l'écrasement entre postes ----------
+   2026-10-06 : verrou optimiste + fusion sur la ligne unique app_state.
+   2026-10-26 : par FICHE (voir « Données par tables » plus haut) — baseState = copie de
+   la dernière version connue du serveur, versionsServeur = version de chaque fiche.
+   Les enregistrements d'un même poste passent l'un après l'autre (pushChain). */
 let baseState = null;
 let pushChain = Promise.resolve();
 let pushInFlight = false;
 function deepClone(o){ return o == null ? o : JSON.parse(JSON.stringify(o)); }
 function sameJson(a, b){ return JSON.stringify(a) === JSON.stringify(b); }
-function isIdArray(a){ return Array.isArray(a) && a.every(x => x && typeof x === 'object' && !Array.isArray(x) && x.id != null); }
-function isPlainObject(o){ return o != null && typeof o === 'object' && !Array.isArray(o); }
 function markSynced(){
   baseState = deepClone(state);
-  serverVersion = state.updated_at || null;
   lastServerVehiculeCount = (state.vehicules||[]).length;
 }
 // Ce poste a-t-il des modifications pas encore enregistrées sur le serveur ?
 function hasLocalChanges(){
   if(!baseState) return false;
-  return !sameJson({...baseState, updated_at:null}, {...state, updated_at:null});
+  return calculerChangements(baseState, state).length > 0;   // l'ordre des listes ne compte pas
 }
-// Fusion champ par champ d'un élément (véhicule, travail, sinistre…) : on part de la
+// Fusion champ par champ d'une fiche (véhicule, travail, sinistre…) : on part de la
 // version serveur et on y remet chaque champ que ce poste a modifié.
 function mergeItem(baseItem, localItem, remoteItem){
   const out = deepClone(remoteItem) || {};
@@ -2804,57 +2889,6 @@ function mergeItem(baseItem, localItem, remoteItem){
     if(localItem[k] === undefined) delete out[k]; else out[k] = deepClone(localItem[k]);
   });
   return out;
-}
-// Fusion d'une liste d'éléments identifiés (id) : ajouts, suppressions et modifications
-// faits sur ce poste sont réappliqués ; tout le reste vient du serveur. Un élément
-// modifié ici mais supprimé ailleurs est conservé (mieux vaut un doublon qu'une perte).
-function mergeArray(baseArr, localArr, remoteArr){
-  baseArr = baseArr || []; localArr = localArr || []; remoteArr = remoteArr || [];
-  const baseById = new Map(baseArr.map(x=>[x.id, x]));
-  const localById = new Map(localArr.map(x=>[x.id, x]));
-  const remoteIds = new Set(remoteArr.map(x=>x.id));
-  const out = [];
-  remoteArr.forEach(r=>{
-    const b = baseById.get(r.id), l = localById.get(r.id);
-    if(b && !l && sameJson(b, r)) return;            // supprimé ici, inchangé ailleurs
-    if(l && !sameJson(b, l)) out.push(mergeItem(b || {}, l, r));
-    else out.push(r);
-  });
-  localArr.forEach(l=>{
-    if(remoteIds.has(l.id)) return;
-    const b = baseById.get(l.id);
-    if(!b || !sameJson(b, l)) out.push(deepClone(l)); // ajouté ici, ou modifié ici et supprimé ailleurs
-  });
-  return out;
-}
-function mergeStates(base, local, remote){
-  base = base || {};
-  const out = deepClone(remote);
-  const keys = new Set([...Object.keys(base), ...Object.keys(local)]);
-  keys.forEach(k=>{
-    if(k === 'updated_at') return;
-    const b = base[k], l = local[k], r = remote[k];
-    if(sameJson(b, l)) return;                        // pas touché sur ce poste
-    if((l == null || isIdArray(l)) && (b == null || isIdArray(b)) && (r == null || isIdArray(r)) && (Array.isArray(l) || Array.isArray(r))){
-      out[k] = mergeArray(b, l, r);
-    } else if(isPlainObject(l) && isPlainObject(b) && isPlainObject(r)){
-      out[k] = mergeItem(b, l, r);
-    } else {
-      out[k] = deepClone(l);
-    }
-  });
-  return out;
-}
-// Applique une version reçue du serveur (temps réel ou resynchronisation). Si ce poste a
-// des modifications en attente, on les réapplique dessus au lieu de les perdre.
-function applyRemoteState(remote){
-  if(!remote) return;
-  if(hasLocalChanges()) state = mergeStates(baseState, state, remote);
-  else state = remote;
-  baseState = deepClone(remote);
-  serverVersion = remote.updated_at || null;
-  lastServerVehiculeCount = (remote.vehicules||[]).length;
-  saveLocal();
 }
 // Messages discrets en bas de l'écran (2026-10-06). Remplacent aussi les fenêtres
 // alert() bloquantes (voir plus bas) : sur une borne tactile, une fenêtre oubliée
@@ -2898,10 +2932,126 @@ function pushState(actionLabel){
   pushChain = run.catch(()=>{});
   return run;
 }
+// Liste des écritures à faire : fiches ajoutées, modifiées, supprimées depuis baseState,
+// réglages changés. Chaque opération garde une copie de ce qui est envoyé.
+function calculerChangements(base, local){
+  const ops = [];
+  base = base || {};
+  TABLES_FICHES.forEach(t=>{
+    const b = new Map((base[t]||[]).filter(x=>x && x.id != null).map(x=>[String(x.id), x]));
+    const l = new Map((local[t]||[]).filter(x=>x && x.id != null).map(x=>[String(x.id), x]));
+    l.forEach((item, id)=>{
+      const bi = b.get(id);
+      if(!bi) ops.push({type:'ajout', table:t, id, item: deepClone(item)});
+      else if(!sameJson(bi, item)) ops.push({type:'modif', table:t, id, item: deepClone(item), base: deepClone(bi)});
+    });
+    b.forEach((bi, id)=>{ if(!l.has(id)) ops.push({type:'suppr', table:t, id, base: deepClone(bi)}); });
+  });
+  new Set([...clesReglages(base), ...clesReglages(local)]).forEach(k=>{
+    if(sameJson(base[k], local[k])) return;
+    ops.push({type: local[k] === undefined ? 'suppr' : 'reglage', table:'reglages', id:k, item: deepClone(local[k]), base: deepClone(base[k])});
+  });
+  return ops;
+}
+function estRefusDroits(err){ return !!err && (err.code === '42501' || /row-level security|permission denied/i.test(err.message||'')); }
+// Lecture d'une seule fiche (conflit ou refus à éclaircir).
+async function lireFiche(table, id){
+  const r = table === 'reglages'
+    ? await supa.from('reglages').select('cle,valeur,version').eq('cle', id).maybeSingle()
+    : await supa.from(table).select('id,data,version').eq('id', id).maybeSingle();
+  if(r.error) throw r.error;
+  return r.data || null;
+}
+// Exécute une opération. ctx.refus / ctx.fusions comptent ce qui a été refusé ou fusionné.
+async function executerOperation(op, ctx){
+  const t = op.table, id = op.id, reg = t === 'reglages';
+  const cle = reg ? 'cle' : 'id';
+  const ligne = item => reg ? {valeur: item} : {data: item};
+  const annuler = ()=>{   // refus des règles d'accès : on revient à la version du serveur
+    ctx.refus.add(t);
+    if(reg){ if(op.base === undefined) delete state[id]; else state[id] = deepClone(op.base); }
+    else if(op.base) placerFiche(state, t, id, deepClone(op.base));
+    else retirerFiche(state, t, id);
+  };
+  const reussi = (item, version)=>{
+    noterVersion(t, id, version);
+    if(reg) baseState[id] = deepClone(item);
+    else placerFiche(baseState, t, id, deepClone(item));
+  };
+  const inserer = async item=>{
+    const r = await supa.from(t).insert(Object.assign({[cle]: id}, ligne(item))).select(cle + ',version');
+    if(!r.error && r.data && r.data.length){ reussi(item, r.data[0].version); return 'ok'; }
+    if(r.error && estRefusDroits(r.error)) return 'refus';
+    if(r.error && r.error.code === '23505') return 'existe';
+    throw r.error || new Error('ajout sans réponse');
+  };
+  if(op.type === 'ajout' || (op.type === 'reglage' && op.base === undefined)){
+    const res = await inserer(op.item);
+    if(res === 'ok') return;
+    if(res === 'refus'){ annuler(); return; }
+    // existe déjà (créée ailleurs entre-temps) : traitée comme une modification
+    op = Object.assign({}, op, {type: reg ? 'reglage' : 'modif', base: {}});
+  }
+  if(op.type === 'modif' || op.type === 'reglage'){
+    let item = op.item, base = op.base, version = versionDe(t, id);
+    for(let essai = 0; essai < 4; essai++){
+      if(version != null){
+        const r = await supa.from(t).update(ligne(item)).eq(cle, id).eq('version', version).select(cle + ',version');
+        if(r.error){ if(estRefusDroits(r.error)){ annuler(); return; } throw r.error; }
+        if(r.data && r.data.length){
+          reussi(item, r.data[0].version);
+          if(item !== op.item){ if(reg) state[id] = deepClone(item); else placerFiche(state, t, id, deepClone(item)); }
+          return;
+        }
+      }
+      // Rien écrit : fiche changée ailleurs, supprimée ailleurs, ou refus des règles d'accès.
+      const distante = await lireFiche(t, id);
+      if(!distante){
+        const res = await inserer(item);   // supprimée ailleurs mais modifiée ici : conservée
+        if(res === 'ok'){ if(item !== op.item) placerFiche(state, t, id, deepClone(item)); return; }
+        if(res === 'refus'){ annuler(); return; }
+        continue;
+      }
+      if(version != null && distante.version === version){ annuler(); return; }   // refus (mise à jour non autorisée)
+      const remote = reg ? distante.valeur : Object.assign({}, distante.data, {id: distante.id});
+      item = reg ? item : mergeItem(base || {}, op.item, remote);
+      base = remote; version = distante.version;
+      ctx.fusions++;
+    }
+    throw new Error('conflits répétés sur ' + t + ' ' + id);
+  }
+  if(op.type === 'suppr'){
+    const version = versionDe(t, id);
+    let q = supa.from(t).delete().eq(cle, id);
+    if(version != null) q = q.eq('version', version);
+    const r = await q.select(cle);
+    if(r.error){ if(estRefusDroits(r.error)){ annuler(); return; } throw r.error; }
+    if(r.data && r.data.length){
+      oublierVersion(t, id);
+      if(reg) delete baseState[id]; else retirerFiche(baseState, t, id);
+      return;
+    }
+    const distante = await lireFiche(t, id);
+    if(!distante){   // déjà supprimée ailleurs
+      oublierVersion(t, id);
+      if(reg) delete baseState[id]; else retirerFiche(baseState, t, id);
+      return;
+    }
+    if(version != null && distante.version === version){ annuler(); return; }   // suppression non autorisée
+    // Modifiée ailleurs entre-temps : on garde la version du serveur.
+    const remote = reg ? distante.valeur : Object.assign({}, distante.data, {id: distante.id});
+    noterVersion(t, id, distante.version);
+    if(reg){ state[id] = deepClone(remote); baseState[id] = deepClone(remote); }
+    else { placerFiche(state, t, id, deepClone(remote)); placerFiche(baseState, t, id, deepClone(remote)); }
+    ctx.fusions++;
+  }
+}
+const LIBELLES_TABLES = {vehicules:'véhicules', travaux:'travaux et signalements', prets:'prêts', sinistres:'sinistres', prestataires:'prestataires', factures:'factures', carrosserie_photos:'carrosserie', materiel_incidents:'incidents matériel', releves_km:'relevés km', materiel_assets:'fiches matériel', personnel:'personnel', board_messages:'messages de l\'État de la flotte', suggestions:'propositions', direction_activity_log:'journal direction', reglages:'réglages'};
 async function pushStateNow(actionLabel){
   state.updated_at = new Date().toISOString();
   if((isDirection || isDirectionOp) && directionSigner) logDirectionActivity(actionLabel);
   saveLocal();
+  const silencieux = pushSilencieux; pushSilencieux = false;
   if(config.url && config.key && !serverLoaded){
     console.error('enregistrement bloqué : données du serveur jamais lues');
     showLoadError(true);
@@ -2910,41 +3060,25 @@ async function pushStateNow(actionLabel){
   if(!supa) return;
   pushInFlight = true;
   try{
-    for(let essai = 0; essai < 4; essai++){
-      if(lastServerVehiculeCount > 0 && !(state.vehicules||[]).length){
-        console.error('enregistrement bloqué : flotte vide alors que le serveur contient des véhicules');
-        setSaveError(true);
-        return;
-      }
-      const stamp = new Date().toISOString();
-      state.updated_at = stamp;
-      const envoye = deepClone(state);
-      const res = serverVersion
-        ? await supa.from('app_state').update({value: envoye, updated_at: stamp}).eq('key','fleet_data').eq('value->>updated_at', serverVersion).select('key')
-        : await supa.from('app_state').upsert({key:'fleet_data', value: envoye, updated_at: stamp}).select('key');
-      if(res.error) throw res.error;
-      if(res.data && res.data.length){
-        // Si une mise à jour temps réel plus récente est arrivée pendant l'envoi,
-        // applyRemoteState a déjà positionné baseState/serverVersion : on n'y touche pas.
-        if(state.updated_at === stamp){ baseState = envoye; serverVersion = stamp; }
-        lastServerVehiculeCount = (envoye.vehicules||[]).length;
-        saveLocal();
-        if(saveErrorActive) setSaveError(false);
-        return;
-      }
-      // Conflit : un autre poste a enregistré depuis notre dernière lecture.
-      const {data: fresh, error: e2} = await supa.from('app_state').select('value').eq('key','fleet_data').maybeSingle();
-      if(e2) throw e2;
-      if(!fresh || !fresh.value) throw new Error('données du serveur introuvables');
-      console.warn('conflit d\'enregistrement : fusion avec la version du serveur', serverVersion, '→', fresh.value.updated_at);
-      state = mergeStates(baseState, state, fresh.value);
-      baseState = deepClone(fresh.value);
-      serverVersion = fresh.value.updated_at || null;
-      lastServerVehiculeCount = (fresh.value.vehicules||[]).length;
-      renderAll();
-      showToast('🔄 Un autre poste venait d\'enregistrer : vos modifications ont été ajoutées aux siennes.');
+    if(lastServerVehiculeCount > 0 && !(state.vehicules||[]).length){
+      console.error('enregistrement bloqué : flotte vide alors que le serveur contient des véhicules');
+      setSaveError(true);
+      return;
     }
-    throw new Error('conflits répétés');
+    const ops = calculerChangements(baseState, state);
+    const ctx = {refus: new Set(), fusions: 0};
+    // Quelques écritures en parallèle (les corrections du démarrage peuvent toucher
+    // plusieurs dizaines de fiches), chacune indépendante.
+    let i = 0;
+    const travailleur = async ()=>{ while(i < ops.length){ const op = ops[i++]; await executerOperation(op, ctx); } };
+    await Promise.all(Array.from({length: Math.min(6, ops.length)}, travailleur));
+    baseState.updated_at = state.updated_at;
+    lastServerVehiculeCount = (baseState.vehicules||[]).length;
+    saveLocal();
+    if(ctx.fusions || ctx.refus.size) renderAll();
+    if(ctx.fusions) showToast('🔄 Un autre poste venait de modifier la même fiche : vos modifications ont été ajoutées aux siennes.');
+    if(ctx.refus.size && !silencieux) showToast('⛔ Modification non autorisée pour votre profil (' + [...ctx.refus].map(t=>LIBELLES_TABLES[t]||t).join(', ') + ') : elle a été annulée.');
+    if(saveErrorActive) setSaveError(false);
   }catch(e){
     console.error('push error', e);
     setSaveError(true);
@@ -2953,16 +3087,28 @@ async function pushStateNow(actionLabel){
   }
 }
 // Rattrapage des mises à jour manquées (borne qui a perdu le wifi, PC en veille…) :
-// on compare seulement l'horodatage du serveur (requête légère) et on recharge si besoin.
+// versions_etat() ne renvoie que les identifiants et versions (requête légère) ; seules
+// les fiches qui ont changé sont ensuite relues.
 async function resyncFromServer(){
   if(!supa || !serverLoaded || pushInFlight) return;
   try{
-    const {data, error} = await supa.from('app_state').select('v:value->>updated_at').eq('key','fleet_data').maybeSingle();
-    if(error || !data || !data.v || data.v === serverVersion) return;
-    const {data: full, error: e2} = await supa.from('app_state').select('value').eq('key','fleet_data').maybeSingle();
-    if(e2 || !full || !full.value || pushInFlight) return;
-    applyRemoteState(full.value);
-    renderAll();
+    const {data, error} = await supa.rpc('versions_etat');
+    if(error || !data || pushInFlight) return;
+    let change = false;
+    for(const t of TABLES_FICHES.concat(['reglages'])){
+      const srv = data[t] || {}, loc = versionsServeur[t] || {};
+      Object.keys(loc).filter(id=>!(id in srv)).forEach(id=>{ appliquerSuppressionDistante(t, id); change = true; });
+      const aLire = Object.keys(srv).filter(id=>srv[id] !== loc[id]);
+      for(let k = 0; k < aLire.length; k += 100){
+        const lot = aLire.slice(k, k + 100);
+        const r = t === 'reglages'
+          ? await supa.from('reglages').select('cle,valeur,version').in('cle', lot)
+          : await supa.from(t).select('id,data,version').in('id', lot);
+        if(r.error) throw r.error;
+        (r.data||[]).forEach(row=>{ appliquerLigneDistante(t, row); change = true; });
+      }
+    }
+    if(change) apresChangementsDistants();
     if(saveErrorActive) pushState('Nouvelle tentative après resynchronisation');
   }catch(e){ console.error('resynchronisation impossible', e); }
 }
@@ -3366,6 +3512,9 @@ setInterval(()=>{
      (dossiers privés) s'ouvrent par des liens temporaires signés (activerDocumentsSignes).
    ============================================================ */
 const ROLES_COMPTES = {gestion:'Gestion', direction:'Direction', direction_op:'Direction opérationnelle', collaborateur:'Collaborateur', borne:'Borne'};
+// Rôle « sauvegarde » (2026-10-26) : compte de la sauvegarde de 23h, lecture de tout, aucune
+// écriture, ne peut pas ouvrir le logiciel (absent de ROLES_COMPTES, voir appliquerProfil).
+const ROLES_LIBELLES = Object.assign({}, ROLES_COMPTES, {sauvegarde:'Sauvegarde (lecture seule)'});
 let clientAuth = null;
 function creerClientSupabase(){
   if(!clientAuth) clientAuth = window.supabase.createClient(config.url, config.key, {auth:{persistSession:true, autoRefreshToken:true, storageKey:'flotte_session_v1'}});
@@ -3451,6 +3600,7 @@ async function seDeconnecter(){
 function purgerDonneesLocales(){
   try{ localStorage.removeItem(LS_STATE); }catch(e){}
   state = JSON.parse(ETAT_INITIAL);
+  versionsServeur = {}; baseState = null;
   try{ renderAll(); }catch(e){}
 }
 document.getElementById('btnSeConnecter').onclick = () => afficherEcranConnexion('', true);
@@ -3535,8 +3685,8 @@ function activerDocumentsSignes(){
 let comptesProfils = [];
 function badgeAcces(p){
   if(!p) return '<span class="badge badge-grey">Aucun accès</span>';
-  if(!p.actif) return `<span class="badge badge-red">Désactivé · ${escapeHtml(ROLES_COMPTES[p.role]||p.role)}</span>`;
-  return `<span class="badge badge-green">${escapeHtml(ROLES_COMPTES[p.role]||p.role)}</span>`;
+  if(!p.actif) return `<span class="badge badge-red">Désactivé · ${escapeHtml(ROLES_LIBELLES[p.role]||p.role)}</span>`;
+  return `<span class="badge badge-green">${escapeHtml(ROLES_LIBELLES[p.role]||p.role)}</span>`;
 }
 async function renderComptes(){
   const etat = document.getElementById('comptesEtat');
@@ -3574,7 +3724,7 @@ async function renderComptes(){
   const ligneTechnique = t => { const p = parEmail.get(t.email); return `<tr>
       <td>${escapeHtml(t.nom)}</td>
       <td>${escapeHtml(t.email)}</td>
-      <td>${p ? badgeAcces(p) : `<span class="meq-par">à créer · ${escapeHtml(ROLES_COMPTES[t.role])}</span>`}</td>
+      <td>${p ? badgeAcces(p) : `<span class="meq-par">à créer · ${escapeHtml(ROLES_LIBELLES[t.role])}</span>`}</td>
       <td>${p
         ? `<button type="button" class="btn btn-outline btn-sm" onclick="ouvrirCompte('${escapeHtml(p.id)}')">Modifier</button>`
         : `<button type="button" class="btn btn-primary btn-sm" data-nom="${escapeHtml(t.nom)}" data-email="${escapeHtml(t.email)}" data-role="${t.role}" onclick="ouvrirCompte(null, this.dataset.nom, this.dataset.email, this.dataset.role)">Créer l'accès</button>`}</td>
@@ -3590,7 +3740,7 @@ async function renderComptes(){
     ${autres.length ? `<h3 style="font-size:14px;margin:16px 0 6px;">Autres accès (comptes hors liste du personnel)</h3>
     <table><thead><tr><th>Nom</th><th>E-mail</th><th>Accès</th><th></th></tr></thead><tbody>${autres.map(p=>ligne(p.nom||'(sans nom)', p.email||'', p)).join('')}</tbody></table>` : ''}`;
 }
-document.getElementById('fCptRole').innerHTML = Object.entries(ROLES_COMPTES).map(([k,l])=>`<option value="${k}">${escapeHtml(l)}</option>`).join('');
+document.getElementById('fCptRole').innerHTML = Object.entries(ROLES_LIBELLES).map(([k,l])=>`<option value="${k}">${escapeHtml(l)}</option>`).join('');
 // Accès techniques proposés (2026-10-20) : une borne par centrale, une tablette Attrib par
 // ambulance active, le compte de la sauvegarde automatique. Adresses construites à partir du
 // domaine (aucune adresse écrite en dur : le contrôle de publication n'en accepte pas).
@@ -3599,7 +3749,7 @@ function slugAcces(txt){ return String(txt||'').normalize('NFD').replace(/[̀-ͯ
 function accesTechniques(){
   const bornes = CENTRALES.map(c=>({nom:`Borne ${c}`, email:`borne-${slugAcces(c)}@${DOMAINE_ACCES}`, role:'borne'}));
   const tablettes = (state.vehicules||[]).filter(v=>!v.archive).sort((a,b)=>(a.nom||'').localeCompare(b.nom||'')).map(v=>({nom:`Tablette ${v.nom}`, email:`tablette-${slugAcces(v.nom).replace(/-/g,'')}@${DOMAINE_ACCES}`, role:'borne'}));
-  return bornes.concat(tablettes, [{nom:'Sauvegarde automatique', email:`sauvegarde-flotte@${DOMAINE_ACCES}`, role:'collaborateur'}]);
+  return bornes.concat(tablettes, [{nom:'Sauvegarde automatique', email:`sauvegarde-flotte@${DOMAINE_ACCES}`, role:'sauvegarde'}]);
 }
 // id = compte existant à modifier ; sinon création (nom / e-mail / rôle pré-remplis).
 function ouvrirCompte(id, nom, email, role){
@@ -3614,7 +3764,7 @@ function ouvrirCompte(id, nom, email, role){
   document.getElementById('fCptMdp').value = '';
   document.getElementById('fCptMdp').type = 'password';
   document.getElementById('fCptMdpLabel').textContent = p ? 'Nouveau mot de passe (laisser vide pour ne pas le changer)' : 'Mot de passe (8 caractères minimum)';
-  document.getElementById('fCptRole').value = p ? p.role : (ROLES_COMPTES[role] ? role : 'collaborateur');
+  document.getElementById('fCptRole').value = p ? p.role : (ROLES_LIBELLES[role] ? role : 'collaborateur');
   document.getElementById('fCptActif').checked = p ? !!p.actif : true;
   document.getElementById('fCptActifWrap').classList.toggle('hidden', !p);
   const soiMeme = p && p.id === profilId;
@@ -3659,7 +3809,7 @@ document.getElementById('btnSaveCompte').onclick = async () => {
       alert('Accès modifié : ' + nom + (mdp ? ' (nouveau mot de passe enregistré)' : '') + '.');
     } else {
       await appelerGestionComptes({action:'creer', nom, email, motDePasse: mdp, role});
-      alert('Accès créé pour ' + nom + ' (' + ROLES_COMPTES[role] + '). Identifiant : ' + email + '.');
+      alert('Accès créé pour ' + nom + ' (' + ROLES_LIBELLES[role] + '). Identifiant : ' + email + '.');
     }
     document.getElementById('fCptMdp').value = '';
     closeModal('modalCompte');
@@ -3752,7 +3902,7 @@ function afficherJournal(){
   el.innerHTML = lignes.length ? `<table><thead><tr><th>Date</th><th>Qui</th><th>Partie</th><th>Fiche</th><th>Changement</th></tr></thead><tbody>`
     + lignes.map(l=>`<tr>
         <td style="white-space:nowrap;">${new Date(l.quand).toLocaleString('fr-CH',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}</td>
-        <td>${escapeHtml(l.auteur||'—')}${l.role ? `<div class="meq-par">${escapeHtml(ROLES_COMPTES[l.role]||l.role)}</div>` : ''}</td>
+        <td>${escapeHtml(l.auteur||'—')}${l.role ? `<div class="meq-par">${escapeHtml(ROLES_LIBELLES[l.role]||l.role)}</div>` : ''}</td>
         <td>${escapeHtml(JM_COLLECTIONS[l.collection]||l.collection)}</td>
         <td>${escapeHtml(l.collection==='reglages' ? jmChamp(l.libelle||l.element_id||'') : String(l.libelle||l.element_id||'').replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, '$3.$2.$1'))}${l.ambulance && l.collection!=='vehicules' ? `<div class="meq-par">${escapeHtml(l.ambulance)}</div>` : ''}</td>
         <td style="font-size:12.5px;min-width:260px;">${icone[l.action]||escapeHtml(l.action)}${jmDetail(l)}</td>
@@ -12102,7 +12252,9 @@ async function init(){
   if(backfillNouveauxTypesMateriel()) needsSave = true;
   if(backfillTablettesParVehicule()) needsSave = true;
   if(backfillSystemesChargement()) needsSave = true;
-  if(needsSave){ await pushState(); }
+  // Corrections du démarrage : un refus des règles d'accès (rôle sans le droit) est annulé
+  // sans message — la gestion les enregistrera à sa prochaine ouverture.
+  if(needsSave){ pushSilencieux = true; await pushState(); }
   // Câblage une fois pour toutes des menus déroulants "Nom" alimentés par la liste du
   // personnel (voir PERSONNEL_LIST) : bascule sur la saisie libre si "Autre" est
   // choisi, et pré-remplit l'e-mail associé quand il y en a un.
