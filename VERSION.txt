@@ -1,2 +1,2 @@
-Préparé le 26.10.2026 13:51
-Dernier enregistrement : 9c95c24 26.10.2026 10:42 Fonction gestion-comptes red├®ploy├®e (r├┤le sauvegarde)
+Préparé le 26.10.2026 15:20
+Dernier enregistrement : 5abe3a8 26.10.2026 15:00 Enregistrement automatique 2026-10-26 15:00 : backups/_journal_sauvegarde.log, backups/app_state_2026-10-26_144619.json

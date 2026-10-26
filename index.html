@@ -1181,6 +1181,8 @@ footer.appfoot{text-align:center;font-size:11.5px;color:#9ca3af;padding:20px;}
       <select id="jmAmbulance" title="Ambulance"><option value="">Toutes les ambulances</option></select>
       <button type="button" class="btn btn-outline btn-sm" id="btnJmActualiser">🔄 Actualiser</button>
     </div>
+    <!-- Alertes du contrôle des champs (2026-10-26, securite/06_controle_champs.sql) -->
+    <div id="jmAlertes" style="margin:8px 0 12px;"></div>
     <div id="jmEtat" style="font-size:13px;margin:6px 0;"></div>
     <div id="jmListe" style="overflow:auto;"></div>
   </div>
@@ -2983,7 +2985,9 @@ async function executerOperation(op, ctx){
     if(!r.error && r.data && r.data.length){ reussi(item, r.data[0].version); return 'ok'; }
     if(r.error && estRefusDroits(r.error)) return 'refus';
     if(r.error && r.error.code === '23505') return 'existe';
-    throw r.error || new Error('ajout sans réponse');
+    // Aucune ligne et aucune erreur : création ignorée par le contrôle des champs (06).
+    if(!r.error) return 'refus';
+    throw r.error;
   };
   if(op.type === 'ajout' || (op.type === 'reglage' && op.base === undefined)){
     const res = await inserer(op.item);
@@ -3909,6 +3913,31 @@ function afficherJournal(){
       </tr>`).join('') + '</tbody></table>'
     : '<div class="empty">Aucune modification pour ces critères.</div>';
 }
+// Alertes du contrôle champ par champ (collaborateurs et bornes) : écritures qui touchaient
+// un champ hors de leur liste. En mode observation elles sont seulement notées (non
+// bloquées) ; en mode blocage, ignorées par la base. Gestion seule (règle d'accès).
+async function afficherAlertesDroits(){
+  const el = document.getElementById('jmAlertes');
+  if(!el || !supa) return;
+  const {data, error} = await supa.from('alertes_droits')
+    .select('quand,auteur,role,table_nom,element_id,operation,motif,champs,bloque').order('id', {ascending:false}).limit(100);
+  if(error){ el.innerHTML = ''; return; }
+  const lignes = data || [];
+  const titre = '<b>🛡️ Contrôle des champs (collaborateurs et bornes)</b>';
+  if(!lignes.length){
+    el.innerHTML = `<div style="font-size:13px;padding:8px 10px;border:1px solid #d1fae5;background:#ecfdf5;border-radius:8px;">${titre} : aucune alerte — toutes leurs modifications respectent les champs autorisés.</div>`;
+    return;
+  }
+  el.innerHTML = `<div style="font-size:13px;padding:8px 10px;border:1px solid #fde68a;background:#fffbeb;border-radius:8px;">${titre} : ${lignes.length} alerte(s) récente(s).
+    <div style="overflow:auto;margin-top:6px;"><table><thead><tr><th>Date</th><th>Qui</th><th>Fiche</th><th>Motif</th><th>Effet</th></tr></thead><tbody>`
+    + lignes.map(a=>`<tr>
+        <td style="white-space:nowrap;">${new Date(a.quand).toLocaleString('fr-CH',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}</td>
+        <td>${escapeHtml(a.auteur||'—')}<div class="meq-par">${escapeHtml(ROLES_LIBELLES[a.role]||a.role||'')}</div></td>
+        <td>${escapeHtml(JM_COLLECTIONS[a.table_nom]||a.table_nom)}<div class="meq-par">${escapeHtml(a.element_id||'')} · ${a.operation==='insert'?'création':'modification'}</div></td>
+        <td style="font-size:12.5px;">${escapeHtml(a.motif)}${a.champs ? `<details><summary style="cursor:pointer;color:var(--grey);">détail</summary>${Object.entries(a.champs).map(([k,d])=>`<div><b>${escapeHtml(jmChamp(k))}</b> : ${d && typeof d==='object' && ('avant' in d) ? `<span style="color:#b91c1c;">${escapeHtml(jmValeur(d.avant))}</span> → <span style="color:#15803d;">${escapeHtml(jmValeur(d.apres))}</span>` : escapeHtml(jmValeur(d))}</div>`).join('')}</details>` : ''}</td>
+        <td>${a.bloque ? '<span style="color:#b91c1c;">⛔ bloquée</span>' : '👁️ notée (non bloquée)'}</td>
+      </tr>`).join('') + '</tbody></table></div></div>';
+}
 async function renderJournal(){
   const etat = document.getElementById('jmEtat');
   const el = document.getElementById('jmListe');
@@ -3932,6 +3961,7 @@ async function renderJournal(){
     return;
   }
   jmLignes = data || [];
+  afficherAlertesDroits();
   etat.textContent = jmLignes.length >= 1000
     ? '1000 modifications les plus récentes affichées — réduisez la période pour remonter plus loin.'
     : `${jmLignes.length} modification(s) sur la période.`;
@@ -9350,8 +9380,7 @@ document.getElementById('btnSendTicket').onclick = async () => {
   tkSelectedFiles = [];
   if(echecsPhotos) showToast(echecsPhotos + ' photo(s) n\'ont pas pu être envoyées (connexion ?). Le signalement est enregistré.');
   state.travaux.push(rec);
-  backfillDernierService();
-  backfillChangementPneus();
+  majEcheancesApresSignalement();
   rememberMyTicketId(id);
   await pushState();
   btn.disabled = false;
@@ -9591,8 +9620,7 @@ document.getElementById('btnSendDeclarationImpact').onclick = async () => {
     documents,
   };
   state.travaux.push(rec);
-  backfillDernierService();
-  backfillChangementPneus();
+  majEcheancesApresSignalement();
   rememberMyTicketId(id);
   await pushState();
   btn.disabled = false;
@@ -11977,6 +12005,15 @@ function backfillDernierService(){
 // (réparations, crevaisons et parallélisme exclus : ce ne sont pas des changements)
 // le dernier changement ; prochain = + 6 mois (ECHEANCE_RULES). Ne recule jamais une
 // date plus récente saisie à la main dans la fiche véhicule.
+// Après un signalement (2026-10-26) : échéances « Prochain service » et « Changement des
+// pneus » recalculées tout de suite, sauf pour un collaborateur ou une borne — ces champs du
+// véhicule ne sont pas les leurs (contrôle des champs, 06_controle_champs.sql) : la gestion
+// ou la direction les recalculent à leur prochaine ouverture ou enregistrement.
+function majEcheancesApresSignalement(){
+  if(modeComptes && (profilRole === 'collaborateur' || profilRole === 'borne')) return;
+  backfillDernierService();
+  backfillChangementPneus();
+}
 function backfillChangementPneus(){
   let changed = false;
   const today = todayISO();
@@ -12224,6 +12261,7 @@ async function init(){
     document.getElementById('cfgKey').value = config.key;
     if(suite === 'connexion_requise') return;
   }
+  const etatAvantCorrections = deepClone(state);
   let needsSave = normalizePrestataireData();
   // Note : l'ACE 703 a été archivée une fois par une migration ponctuelle (sortie de
   // flotte active). Cette migration ne se ré-exécute plus à chaque chargement, pour
@@ -12254,7 +12292,12 @@ async function init(){
   if(backfillSystemesChargement()) needsSave = true;
   // Corrections du démarrage : un refus des règles d'accès (rôle sans le droit) est annulé
   // sans message — la gestion les enregistrera à sa prochaine ouverture.
-  if(needsSave){ pushSilencieux = true; await pushState(); }
+  // Collaborateurs et bornes n'enregistrent pas ces corrections (elles touchent des champs
+  // qui ne sont pas les leurs, voir 06_controle_champs.sql) : la gestion ou la direction les
+  // enregistreront à leur prochaine ouverture ; d'ici là, ce poste affiche les données du serveur.
+  const correctionsReservees = modeComptes && (profilRole === 'collaborateur' || profilRole === 'borne');
+  if(needsSave && correctionsReservees){ state = etatAvantCorrections; }
+  else if(needsSave){ pushSilencieux = true; await pushState(); }
   // Câblage une fois pour toutes des menus déroulants "Nom" alimentés par la liste du
   // personnel (voir PERSONNEL_LIST) : bascule sur la saisie libre si "Autre" est
   // choisi, et pré-remplit l'e-mail associé quand il y en a un.
@@ -12379,7 +12422,7 @@ const AIDE_FICHES = [
   {titre:'Proposer une amélioration', q:['j ai une idee','proposer une amelioration','suggestion','il manque quelque chose','ce serait pratique'], mots:'idee proposition proposer amelioration ameliorer suggestion suggerer manque pratique evolution remarque', r:'Onglet <b>Aide</b>, partie « 💡 Proposer une amélioration » : votre nom, la partie du logiciel concernée, votre idée, puis « Envoyer la proposition ». Le responsable de flotte la reçoit aussitôt et la suit (à l\'étude, retenue, réalisée…).', vue:'aide'},
   {titre:'Se connecter', q:['comment me connecter','mot de passe oublie','je n arrive pas a me connecter','se deconnecter'], mots:'connexion connecter compte mot passe oublie identifiant email deconnecter', r:'Bouton « 🔑 Se connecter » en haut (s\'il est affiché), puis votre adresse e-mail et votre mot de passe. Mot de passe oublié ou compte bloqué : contactez le responsable de flotte, qui peut le réinitialiser. Pour quitter un poste partagé : « 🚪 Se déconnecter » en haut.', guide:'ouvrir'},
   {titre:'Comptes utilisateurs', q:['ajouter un utilisateur','creer un compte','changer le role d un compte','retirer l acces'], mots:'compte utilisateur ajouter creer role desactiver acces nouveau employe depart', r:'Ajout : Supabase → Authentication → Users → « Add user » (e-mail, mot de passe, « Auto Confirm User » coché). Puis dans l\'application : <b>Réglages</b> → « Comptes utilisateurs » → choisir le rôle (Gestion, Direction, Direction opérationnelle, Collaborateur, Borne) et le nom → « Enregistrer ». Décocher « Actif » retire immédiatement l\'accès.', vue:'reglages', guide:'profils'},
-  {titre:'Journal des modifications', q:['qui a modifie','qui a supprime','historique des modifications','voir les changements'], mots:'journal historique modification modifie supprime qui trace changement avant apres audit', r:'<b>Réglages</b> → « Journal des modifications » (compte de gestion uniquement) : chaque enregistrement est noté par le serveur — date, personne, partie du logiciel, fiche, et pour une modification l\'ancienne valeur (en rouge) et la nouvelle (en vert). Filtres par période, personne, partie et ambulance. Le journal ne peut être ni modifié ni effacé depuis le logiciel.', vue:'reglages', guide:'profils'},
+  {titre:'Journal des modifications', q:['qui a modifie','qui a supprime','historique des modifications','voir les changements'], mots:'journal historique modification modifie supprime qui trace changement avant apres audit', r:'<b>Réglages</b> → « Journal des modifications » (compte de gestion uniquement) : chaque enregistrement est noté par le serveur — date, personne, partie du logiciel, fiche, et pour une modification l\'ancienne valeur (en rouge) et la nouvelle (en vert). Filtres par période, personne, partie et ambulance. Le journal ne peut être ni modifié ni effacé depuis le logiciel. Au-dessus du journal, « 🛡️ Contrôle des champs » liste les modifications d\'un collaborateur ou d\'une borne qui touchaient un champ qui ne les concerne pas (ex. immatriculation, coût) : notées seulement pendant la période d\'observation, refusées ensuite.', vue:'reglages', guide:'profils'},
   {titre:'Installer une borne en centrale', q:['installer la borne','verrouiller l ecran en centrale','deverrouiller la borne','code borne'], mots:'installer verrouiller deverrouiller borne code ecran centrale poste', r:'Mode gestion → <b>Réglages</b> → « Borne en centrale » : définissez le code borne, puis, <b>sur le poste de la centrale</b>, « Verrouiller ce poste en borne ». Le poste reste en affichage borne (gestion et direction masquées), même après redémarrage ; le mode collaborateur revient seul en borne après 3 minutes sans activité. Pour déverrouiller : bouton « 🔒 Borne », puis le code borne ou le code gestion.', vue:'reglages', guide:'ouvrir'},
   {titre:'Plein écran sur la borne', q:['plein ecran','affichage borne'], mots:'plein ecran borne affichage centrale tactile', r:'Bouton « Plein écran » en haut de l\'État de la flotte. La borne se met à jour toute seule et se recharge chaque nuit.', vue:'board', guide:'ouvrir'},
   {titre:'Contact', q:['qui contacter','j ai une question','signaler un bug','demande d amelioration'], mots:'contact question bug erreur amelioration responsable aide joindre', r:'Le responsable de flotte, <b>Jérôme Dujoux</b>, pour toute question, erreur ou demande d\'amélioration.', guide:'depannage'},
