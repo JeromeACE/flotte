@@ -1,2 +1,2 @@
-Préparé le 26.10.2026 16:20
-Dernier enregistrement : 206fbcc 26.10.2026 16:16 Corrections de l'analyse : factures et preuves prot├®g├®es, cl├┤ture auto par la base, session expir├®e, photos r├®duites
+Préparé le 02.11.2026 16:25
+Dernier enregistrement : cb920a0 02.11.2026 16:24 Sauvegarde du PC ├á 12h00 au lieu de 23h00 (PC portable)

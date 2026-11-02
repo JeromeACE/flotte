@@ -10401,6 +10401,15 @@ document.getElementById('fSiResponsabilite').addEventListener('change', () => {
     franchiseInput.value = 1000;
   }
 });
+// Statut et date de clôture liés (2026-11-02) : saisir une date de clôture passe le statut à
+// « Clôturé » ; choisir « Clôturé » sans date met la date du jour (modifiable).
+document.getElementById('fSiDateCloture').addEventListener('change', e=>{
+  if(e.target.value) document.getElementById('fSiStatut').value = 'Clôturé';
+});
+document.getElementById('fSiStatut').addEventListener('change', e=>{
+  const d = document.getElementById('fSiDateCloture');
+  if(e.target.value === 'Clôturé' && !d.value) d.value = todayISO();
+});
 document.getElementById('btnSaveSinistre').onclick = async () => {
   const id = document.getElementById('btnSaveSinistre').dataset.editId;
   const data = {
@@ -10424,6 +10433,8 @@ document.getElementById('btnSaveSinistre').onclick = async () => {
     date_cloture: document.getElementById('fSiDateCloture').value || null,
     commentaires: document.getElementById('fSiCommentaires').value.trim(),
   };
+  // Une date de clôture = dossier clôturé (2026-11-02, retour du propriétaire).
+  if(data.date_cloture) data.statut = 'Clôturé';
   if(!data.ambulance || !data.date_evenement){ alert('Ambulance et date de l\'événement sont requis.'); return; }
   if(sinistreRoulantExigeAccord(data.roulant) && !data.cadre_garde_accord){
     alert((data.roulant === 'releve' ? 'Véhicule limité aux relèves' : 'Véhicule immobilisé') + ' : merci d\'indiquer quel cadre a donné son accord par téléphone avant d\'enregistrer.');
@@ -12142,6 +12153,15 @@ function migrateRevisionStrickerToEquipement(){
 // Corrige l'orthographe "Cloturé" (sans accent circonflexe) éventuellement déjà
 // enregistrée avant correction du logiciel, pour rester cohérent avec "Clôturé"
 // utilisé partout ailleurs (ex. onglet Sinistres).
+// Sinistre avec une date de clôture mais un autre statut (saisi avant le 2026-11-02, quand la
+// date ne changeait pas le statut ; ex. ACE 707 du 07.10) : passé à « Clôturé ».
+function fixSinistresDateCloture(){
+  let changed = false;
+  (state.sinistres||[]).forEach(s=>{
+    if(s.date_cloture && s.statut !== 'Clôturé'){ s.statut = 'Clôturé'; changed = true; }
+  });
+  return changed;
+}
 function fixClotureAccentSpelling(){
   let changed = false;
   (state.travaux||[]).forEach(t=>{
@@ -12343,6 +12363,7 @@ async function init(){
   if(backfillDernierService()) needsSave = true;
   if(backfillChangementPneus()) needsSave = true;
   if(fixClotureAccentSpelling()) needsSave = true;
+  if(fixSinistresDateCloture()) needsSave = true;
   if(migrateMaterielIncidentsFromTravaux()) needsSave = true;
   if(backfillMaterielAssets()) needsSave = true;
   if(backfillNouveauxTypesMateriel()) needsSave = true;
