@@ -551,6 +551,11 @@ footer.appfoot{text-align:center;font-size:11.5px;color:#9ca3af;padding:20px;}
   justify-content:center;box-shadow:0 -2px 12px rgba(0,0,0,.28);flex-wrap:wrap;text-align:center;}
 .save-error-banner .btn{background:#fff;color:#b91c1c;}
 .save-error-banner .btn:hover{background:#f3f4f6;}
+.maj-banner{position:fixed;left:0;right:0;bottom:0;z-index:9998;background:#1f2a44;color:#fff;
+  padding:10px 16px;font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:12px;
+  justify-content:center;box-shadow:0 -2px 12px rgba(0,0,0,.28);flex-wrap:wrap;text-align:center;}
+.maj-banner .btn{background:#fff;color:#1f2a44;}
+.maj-banner .btn:hover{background:#f3f4f6;}
 .status-pill.sync-error{background:#fecaca;color:#7f1d1d;font-weight:700;}
 </style>
 </head>
@@ -576,6 +581,10 @@ footer.appfoot{text-align:center;font-size:11.5px;color:#9ca3af;padding:20px;}
     <button type="button" class="btn btn-outline hidden" id="btnCnxAnnuler">Annuler</button>
     <p class="ecran-connexion-aide">Mot de passe oublié ou compte bloqué : contactez le responsable de flotte.</p>
   </form>
+</div>
+<div id="majBanner" class="maj-banner hidden" role="status">
+  <span>🔄 Une nouvelle version du logiciel est disponible.</span>
+  <button type="button" class="btn btn-sm" id="btnMaj" onclick="appliquerMiseAJour()">Mettre à jour</button>
 </div>
 <div id="loadErrorBanner" class="save-error-banner hidden" role="alert">
   <span>⚠️ Impossible de lire les données du serveur (problème de connexion ?). Pour protéger les données partagées,
@@ -12499,6 +12508,7 @@ const AIDE_FICHES = [
   {titre:'Contrôles et matériel d\'une ambulance', q:['ou voir les controles d une ambulance','materiel d une ambulance','date de revision du scope','onglet materiel medical'], mots:'controle controles materiel embarque medical fiche revision scope brancard aspiration chaise extincteur peremption desinfection suivi ambulance', r:'Onglet <b>Contrôles & matériel</b> (anciennement « Matériel médical ») : un tableau, une ligne par ambulance : une pastille de couleur et la date du dernier contrôle (péremptions, suivi hebdomadaire, désinfection complète, désinfection des sacs), puis le matériel embarqué en 3 pastilles (vert, orange, rouge). Survolez une case pour le détail ; « Détail » ouvre la liste des contrôles et des appareils (un clic ouvre la fiche de l\'appareil, ✏️ corrige les dates des contrôles).', vue:'materiel'},
   {titre:'Corriger ou supprimer un relevé km', q:['erreur de kilometrage','corriger un releve km','supprimer un releve','mauvais km','ajouter un releve km'], mots:'kilometrage km releve releves erreur faute corriger supprimer effacer modifier ajouter compteur', r:'Mode gestion, onglet <b>Carnet d\'entretien</b>, ambulance concernée, partie « Suivi des niveaux et relevés km » : ✏️ sur la ligne pour corriger la date, le km ou les initiales, ou « 🗑️ Supprimer ce relevé ». « + Ajouter un relevé km » saisit un relevé seul (ex. relevé général). Le kilométrage de l\'ambulance est recalculé automatiquement à partir du relevé le plus récent.', vue:'carnet'},
   {titre:'Proposer une amélioration', q:['j ai une idee','proposer une amelioration','suggestion','il manque quelque chose','ce serait pratique'], mots:'idee proposition proposer amelioration ameliorer suggestion suggerer manque pratique evolution remarque', r:'Onglet <b>Aide</b>, partie « 💡 Proposer une amélioration » : votre nom, la partie du logiciel concernée, votre idée, puis « Envoyer la proposition ». Le responsable de flotte la reçoit aussitôt et la suit (à l\'étude, retenue, réalisée…).', vue:'aide'},
+  {titre:'Nouvelle version du logiciel', q:['nouvelle version disponible','mettre a jour le logiciel','bandeau mettre a jour','comment avoir la derniere version'], mots:'version mise jour mettre actualiser bandeau correction recharger', r:'Quand une correction est publiée, un bandeau « Nouvelle version disponible » apparaît en bas de l\'écran. Cliquez sur « Mettre à jour » : la page se recharge, vos données ne changent pas. Si une fenêtre est ouverte, terminez-la d\'abord. Les bornes se mettent à jour seules quand personne ne les utilise.', guide:'ouvrir'},
   {titre:'Se connecter', q:['comment me connecter','mot de passe oublie','je n arrive pas a me connecter','se deconnecter'], mots:'connexion connecter compte mot passe oublie identifiant email deconnecter', r:'Bouton « 🔑 Se connecter » en haut (s\'il est affiché), puis votre adresse e-mail et votre mot de passe. Mot de passe oublié ou compte bloqué : contactez le responsable de flotte, qui peut le réinitialiser. Pour quitter un poste partagé : « 🚪 Se déconnecter » en haut.', guide:'ouvrir'},
   {titre:'Comptes utilisateurs', q:['ajouter un utilisateur','creer un compte','changer le role d un compte','retirer l acces'], mots:'compte utilisateur ajouter creer role desactiver acces nouveau employe depart', r:'Ajout : Supabase → Authentication → Users → « Add user » (e-mail, mot de passe, « Auto Confirm User » coché). Puis dans l\'application : <b>Réglages</b> → « Comptes utilisateurs » → choisir le rôle (Gestion, Direction, Direction opérationnelle, Collaborateur, Borne) et le nom → « Enregistrer ». Décocher « Actif » retire immédiatement l\'accès.', vue:'reglages', guide:'profils'},
   {titre:'Journal des modifications', q:['qui a modifie','qui a supprime','historique des modifications','voir les changements'], mots:'journal historique modification modifie supprime qui trace changement avant apres audit', r:'<b>Réglages</b> → « Journal des modifications » (compte de gestion uniquement) : chaque enregistrement est noté par le serveur — date, personne, partie du logiciel, fiche, et pour une modification l\'ancienne valeur (en rouge) et la nouvelle (en vert). Filtres par période, personne, partie et ambulance. Le journal ne peut être ni modifié ni effacé depuis le logiciel. Au-dessus du journal, « 🛡️ Contrôle des champs » liste les modifications d\'un collaborateur ou d\'une borne qui touchaient un champ qui ne les concerne pas (ex. immatriculation, coût) : notées seulement pendant la période d\'observation, refusées ensuite.', vue:'reglages', guide:'profils'},
@@ -12807,6 +12817,53 @@ setInterval(()=>{
     }
   }
 }, 60 * 1000);
+
+// Mises à jour du logiciel (2026-11-09) : chaque publication reçoit un numéro, inscrit par
+// preparer_mise_en_ligne.ps1 dans la ligne ci-dessous et dans VERSION.txt. Numéro vide = fichier
+// ouvert depuis le PC : pas de vérification. Si une version plus récente est en ligne : bandeau
+// « Mettre à jour » (jamais de rechargement imposé sur un poste normal) ; une borne se recharge
+// seule après 5 min sans activité, si aucune fenêtre n'est ouverte et que tout est enregistré.
+const VERSION_LOGICIEL = '20261109-123227';
+let versionEnLigne = null;
+let derniereActivitePoste = Date.now();
+['pointerdown','keydown','touchstart'].forEach(ev => document.addEventListener(ev, ()=>{ derniereActivitePoste = Date.now(); }, {passive:true, capture:true}));
+function fenetreOuverte(){ return !!document.querySelector('.modal-bg.open, .modal.open, [id^="modal"].open'); }
+async function verifierVersionLogiciel(){
+  if(!VERSION_LOGICIEL) return;
+  try{
+    const r = await fetch('VERSION.txt?t=' + Date.now(), {cache:'no-store'});
+    if(!r.ok) return;
+    const m = (await r.text()).match(/Code\s*:\s*(\d{8}-\d{6})/);
+    if(!m || m[1] <= VERSION_LOGICIEL) return;
+    versionEnLigne = m[1];
+    document.getElementById('majBanner').classList.remove('hidden');
+  }catch(e){ /* pas de réseau : nouvel essai à la prochaine vérification */ }
+}
+async function rechargerNouvelleVersion(){
+  // Force le navigateur à reprendre la page en ligne au lieu de sa copie (gardée 10 min par GitHub).
+  try{ await fetch(location.href.split('#')[0], {cache:'reload'}); }catch(e){}
+  location.reload();
+}
+function appliquerMiseAJour(){
+  if(fenetreOuverte()){ showToast('Terminez ou fermez la fenêtre ouverte, puis cliquez sur « Mettre à jour ».'); return; }
+  if(hasLocalChanges() || saveErrorActive){ showToast('Des modifications sont en cours d\'enregistrement : réessayez dans un instant.'); return; }
+  document.getElementById('btnMaj').disabled = true;
+  rechargerNouvelleVersion();
+}
+function majBorneSiPossible(){
+  if(!versionEnLigne || !isBorneMode() || fenetreOuverte() || hasLocalChanges() || saveErrorActive) return;
+  if(Date.now() - derniereActivitePoste < 5 * 60 * 1000) return;
+  // Un seul essai par version et par demi-heure : pas de boucle si l'ancienne page revient encore.
+  let essai = {};
+  try{ essai = JSON.parse(localStorage.getItem('flotte_maj_borne_essai') || '{}'); }catch(e){}
+  if(essai.version === versionEnLigne && Date.now() - essai.quand < 30 * 60 * 1000) return;
+  try{ localStorage.setItem('flotte_maj_borne_essai', JSON.stringify({version:versionEnLigne, quand:Date.now()})); }catch(e){}
+  rechargerNouvelleVersion();
+}
+setTimeout(verifierVersionLogiciel, 30 * 1000);
+setInterval(verifierVersionLogiciel, 5 * 60 * 1000);
+setInterval(majBorneSiPossible, 60 * 1000);
+document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState === 'visible') verifierVersionLogiciel(); });
 </script>
 <div id="printArea"></div>
 </body>
