@@ -870,7 +870,7 @@ footer.appfoot{text-align:center;font-size:11.5px;color:#9ca3af;padding:20px;}
 
 <!-- REPARATION -->
 <section class="view" id="view-materiel-reparation">
-  <p style="font-size:12.5px;color:#4b5563;margin:0 0 10px;">Ce qui est actuellement parti en réparation ou en attente de devis (statut "Devis en cours" ou "En réparation") — une vue concentrée sur ce qui est en cours, sans le reste de l'historique. Le détail complet (coût, prestataire, facture) reste dans <b>Travaux matériel</b>. Quand un appareil suivi individuellement (Fiches matériel) part en réparation, il est automatiquement détaché de son véhicule et redevient dispo pour un remplacement depuis la <b>Réserve</b>.</p>
+  <p style="font-size:12.5px;color:#4b5563;margin:0 0 10px;">Ce qui est actuellement parti en réparation ou en attente de devis (statut "Devis en cours" ou "En réparation") — une vue concentrée sur ce qui est en cours, sans le reste de l'historique. Le détail complet (coût, prestataire, facture) reste dans <b>Travaux matériel</b>. Quand un appareil suivi individuellement (Fiches matériel) part en réparation, il est automatiquement détaché de son véhicule et redevient dispo pour un remplacement depuis la <b>Réserve</b>. Un appareil peut aussi être mis « 🔧 En réparation » directement depuis sa fiche (✏️ Modifier → Véhicule actuel), sans signalement de panne : il apparaît ici jusqu'à ce qu'on le réaffecte à une ambulance ou à la réserve.</p>
   <div class="toolbar">
     <select id="rpFilterAmb"><option value="">Toutes les ambulances</option></select>
     <input type="text" id="rpSearch" placeholder="Rechercher (description, prestataire...)">
@@ -993,6 +993,7 @@ footer.appfoot{text-align:center;font-size:11.5px;color:#9ca3af;padding:20px;}
 <!-- FICHES MATERIEL (une fiche par appareil physique, indépendante du véhicule) -->
 <section class="view" id="view-materiel-fiches">
   <p style="font-size:12.5px;color:#4b5563;margin:0 0 10px;">Une fiche par appareil physique (Scope, Brancard, Aspiration, Chaise, Extincteur, ou tout autre matériel que vous souhaitez suivre individuellement), avec son véhicule actuel, son statut (en service / réserve / réparation) et l'échéance de son prochain contrôle — indépendant du véhicule sur lequel il se trouve à un instant donné. Utilisez les filtres ci-dessous pour n'afficher qu'un type à la fois. Consultable par la direction ; modifiable uniquement en mode gestion.</p>
+  <div class="ma-type-filters" id="maLieuFilters"></div>
   <div class="ma-type-filters" id="maTypeFilters"></div>
   <div class="toolbar">
     <input type="text" id="maSearch" placeholder="Rechercher (nom, type, véhicule...)">
@@ -2483,10 +2484,12 @@ const ECHEANCE_RULES = {
   // months n'est plus utilisé pour ce type, alertDays (30 j) toujours.
   'Changement des pneus':                  {months:6,  alertDays:30},
   'Prochain service à effectuer':          {months:12, alertDays:30},
-  'Brancard':                               {months:12, alertDays:30},
+  // Brancard et système de chargement : révision tous les 2 ans depuis le 2026-11-10
+  // (demande du propriétaire ; annuelle auparavant).
+  'Brancard':                               {months:24, alertDays:30},
   // Système de chargement Stryker (Power-LOAD), fixé dans l'ambulance : même révision
-  // annuelle que le brancard (2026-10-08).
-  'Système de chargement':                  {months:12, alertDays:30},
+  // que le brancard (2026-10-08).
+  'Système de chargement':                  {months:24, alertDays:30},
   'Scope':                                  {months:12, alertDays:30},
   'Aspiration':                             {months:12, alertDays:30},
   'Chaise':                                 {months:12, alertDays:30},
@@ -5931,6 +5934,7 @@ async function reassignMaterielAsset(assetId, newVeh){
     }
   }
   a.vehicule_actuel = newVeh || '';
+  if(newVeh && a.en_reparation){ a.en_reparation = false; a.reparation_depuis = ''; }
   await pushState();
   renderAll();
   return true;
@@ -5954,7 +5958,9 @@ async function reassignMaterielAsset(assetId, newVeh){
 function materielAssetStatus(asset){
   if(asset.archive) return 'hors_service';
   if(!asset.vehicule_actuel && !asset.emplacement_centrale){
-    const enReparation = (state.materiel_incidents||[]).some(m=>!m.archive && m.materiel_asset_id===asset.id && MI_REPAIR_PIPELINE_STATUTS.includes(m.statut));
+    // asset.en_reparation (2026-11-10) : appareil mis « En réparation » directement depuis sa
+    // fiche, sans signalement de panne — reste en réparation jusqu'à sa réaffectation.
+    const enReparation = !!asset.en_reparation || (state.materiel_incidents||[]).some(m=>!m.archive && m.materiel_asset_id===asset.id && MI_REPAIR_PIPELINE_STATUTS.includes(m.statut));
     return enReparation ? 'en_reparation' : 'en_reserve';
   }
   return 'en_service';
@@ -6579,6 +6585,37 @@ let showArchivedMa = false;
 // null = "Tous" (regroupé par type) ; un type de KNOWN_MATERIEL_TYPES ; ou '__autre__'
 // pour ne montrer que les types personnalisés (voir renderMaTypeFilters).
 let maTypeFilter = null;
+// Valeur du choix « 🔧 En réparation » dans « Véhicule actuel » de la fiche d'un appareil.
+const MA_EN_REPARATION = '__en_reparation__';
+// Filtre par emplacement (2026-11-10) : null = tous ; 'ambulance', 'centrale', 'reserve',
+// 'reparation' (voir maLieu). Se combine avec le filtre de type.
+let maLieuFilter = null;
+function maLieu(a){
+  const s = materielAssetStatus(a);
+  if(s === 'en_service') return a.vehicule_actuel ? 'ambulance' : 'centrale';
+  return {en_reserve:'reserve', en_reparation:'reparation'}[s] || 'hors_service';
+}
+const MA_LIEUX = [{key:'ambulance', label:'🚑 Ambulances'}, {key:'centrale', label:'🏢 Centrales'}, {key:'reserve', label:'📦 Réserve'}, {key:'reparation', label:'🔧 En réparation'}];
+function maTypeMatch(a){
+  if(!maTypeFilter) return true;
+  if(maTypeFilter === '__autre__') return !KNOWN_MATERIEL_TYPES.includes(a.type);
+  return a.type === maTypeFilter;
+}
+function renderMaLieuFilters(){
+  const el = document.getElementById('maLieuFilters');
+  if(!el) return;
+  const base = maBaseFilteredAssets().filter(maTypeMatch);
+  const counts = {};
+  base.forEach(a=>{ const l = maLieu(a); counts[l] = (counts[l]||0) + 1; });
+  const chips = [{key:null, label:'Tous les emplacements'}].concat(MA_LIEUX.filter(l=>l.key!=='centrale' || counts.centrale || maLieuFilter==='centrale'));
+  el.innerHTML = chips.map(c=>{
+    const n = c.key===null ? base.length : (counts[c.key]||0);
+    return `<button type="button" class="ma-type-chip ${maLieuFilter===c.key?'active':''}" data-key="${c.key||''}">${escapeHtml(c.label)}<span class="ma-type-chip-count">${n}</span></button>`;
+  }).join('');
+  el.querySelectorAll('.ma-type-chip').forEach(btn=>{
+    btn.addEventListener('click', ()=>{ maLieuFilter = btn.dataset.key || null; renderMaGrid(); });
+  });
+}
 // Filtre archive + recherche texte uniquement (sans le filtre de type), pour que les
 // compteurs de la barre de filtres restent cohérents avec la recherche en cours, quel
 // que soit le filtre de type actif.
@@ -6589,11 +6626,8 @@ function maBaseFilteredAssets(){
 }
 function filteredMaterielAssets(){
   return maBaseFilteredAssets()
-    .filter(a => {
-      if(!maTypeFilter) return true;
-      if(maTypeFilter === '__autre__') return !KNOWN_MATERIEL_TYPES.includes(a.type);
-      return a.type === maTypeFilter;
-    })
+    .filter(maTypeMatch)
+    .filter(a => !maLieuFilter || maLieu(a) === maLieuFilter)
     .sort((a,b)=> a.type===b.type ? (a.nom||'').localeCompare(b.nom||'') : materielTypeSortIndex(a.type)-materielTypeSortIndex(b.type));
 }
 // Barre de "masques" cliquables (icône + libellé + compteur) au-dessus de la grille :
@@ -6602,7 +6636,7 @@ function filteredMaterielAssets(){
 function renderMaTypeFilters(){
   const el = document.getElementById('maTypeFilters');
   if(!el) return;
-  const base = maBaseFilteredAssets();
+  const base = maBaseFilteredAssets().filter(a => !maLieuFilter || maLieu(a) === maLieuFilter);
   const counts = {};
   base.forEach(a=>{
     const key = KNOWN_MATERIEL_TYPES.includes(a.type) ? a.type : '__autre__';
@@ -6645,6 +6679,7 @@ function maCardHtml(a){
   </div>`;
 }
 function renderMaGrid(){
+  renderMaLieuFilters();
   renderMaTypeFilters();
   const list = filteredMaterielAssets();
   const archivedCount = (state.materiel_assets||[]).filter(a=>a.archive).length;
@@ -6793,7 +6828,10 @@ function editMaterielAsset(id){
   document.getElementById('fMaTypeAutre').disabled = true;
   document.getElementById('fMaNom').value = a.nom || '';
   const vehOptions = [...new Set((state.vehicules||[]).filter(v=>!v.archive).map(v=>v.nom))].sort();
-  document.getElementById('fMaVehicule').innerHTML = '<option value="">— Non affecté —</option>' + vehOptions.map(nom=>`<option ${a.vehicule_actuel===nom?'selected':''}>${escapeHtml(nom)}</option>`).join('');
+  const enRep = !!a.en_reparation && !a.vehicule_actuel && !a.emplacement_centrale;
+  document.getElementById('fMaVehicule').innerHTML = '<option value="">— Non affecté (réserve) —</option>'
+    + `<option value="${MA_EN_REPARATION}" ${enRep?'selected':''}>🔧 En réparation</option>`
+    + vehOptions.map(nom=>`<option ${a.vehicule_actuel===nom?'selected':''}>${escapeHtml(nom)}</option>`).join('');
   populateMaCentraleSelect(a.emplacement_centrale || '');
   document.getElementById('fMaVehicule').disabled = !!a.emplacement_centrale;
   document.getElementById('fMaCentrale').disabled = !!a.vehicule_actuel;
@@ -6823,7 +6861,9 @@ function newMaterielAsset(){
   onMaTypeChange();
   document.getElementById('fMaNom').value = '';
   const vehOptions = [...new Set((state.vehicules||[]).filter(v=>!v.archive).map(v=>v.nom))].sort();
-  document.getElementById('fMaVehicule').innerHTML = '<option value="">— Non affecté (réserve) —</option>' + vehOptions.map(nom=>`<option>${escapeHtml(nom)}</option>`).join('');
+  document.getElementById('fMaVehicule').innerHTML = '<option value="">— Non affecté (réserve) —</option>'
+    + `<option value="${MA_EN_REPARATION}">🔧 En réparation</option>`
+    + vehOptions.map(nom=>`<option>${escapeHtml(nom)}</option>`).join('');
   document.getElementById('fMaVehicule').disabled = false;
   populateMaCentraleSelect('');
   document.getElementById('fMaCentrale').disabled = false;
@@ -6851,7 +6891,8 @@ document.getElementById('btnSaveMaterielAsset').onclick = async () => {
   const nom = document.getElementById('fMaNom').value.trim();
   if(!nom){ alert('Le nom / identifiant est requis.'); return; }
   const type = isNew ? materielAssetTypeValue() : a.type;
-  const vehiculeChoisi = document.getElementById('fMaVehicule').value || '';
+  const enReparationChoisi = document.getElementById('fMaVehicule').value === MA_EN_REPARATION;
+  const vehiculeChoisi = enReparationChoisi ? '' : (document.getElementById('fMaVehicule').value || '');
   const centraleChoisie = document.getElementById('fMaCentrale').value || '';
   // Garde-fou (audit du 08.09, assoupli le 15.09 — voir MATERIEL_QUANTITE_MAX_PAR_VEHICULE) :
   // le board (icônes matériel) ne cherche que le PREMIER appareil trouvé du même type sur
@@ -6886,6 +6927,13 @@ document.getElementById('btnSaveMaterielAsset').onclick = async () => {
   // supplémentaire ici au cas où l'un des deux champs aurait été rempli par script.
   a.vehicule_actuel = centraleChoisie ? '' : vehiculeChoisi;
   a.emplacement_centrale = vehiculeChoisi ? '' : (centraleChoisie || '');
+  if(enReparationChoisi && !centraleChoisie){
+    if(!a.en_reparation) a.reparation_depuis = todayISO();
+    a.en_reparation = true;
+  } else if(a.en_reparation){
+    a.en_reparation = false;
+    a.reparation_depuis = '';
+  }
   a.numero_serie = document.getElementById('fMaNumSerie').value.trim();
   a.date_dernier = document.getElementById('fMaDateDernier').value || '';
   a.date_prochain = document.getElementById('fMaDateProchain').value || '';
@@ -7202,8 +7250,28 @@ function renderMaReparation(){
     .filter(m=>!fAmb || m.ambulance===fAmb)
     .filter(m=>!q || JSON.stringify(m).toLowerCase().includes(q))
     .sort((a,b)=>(materielIncidentStatutDepuis(b)||'').localeCompare(materielIncidentStatutDepuis(a)||''));
-  document.getElementById('rpEmpty').classList.toggle('hidden', list.length>0);
-  document.getElementById('rpBody').innerHTML = list.map(m=>{
+  // Appareils mis « En réparation » depuis leur fiche, sans signalement de panne en cours
+  // (2026-11-10) : affichés aussi, avec la fiche de l'appareil comme lien.
+  const avecIncident = new Set(list.map(m=>m.materiel_asset_id).filter(Boolean));
+  const sansIncident = fAmb ? [] : (state.materiel_assets||[])
+    .filter(a=>!a.archive && a.en_reparation && materielAssetStatus(a)==='en_reparation' && !avecIncident.has(a.id))
+    .filter(a=>!q || JSON.stringify(a).toLowerCase().includes(q))
+    .sort((a,b)=>(b.reparation_depuis||'').localeCompare(a.reparation_depuis||''));
+  document.getElementById('rpEmpty').classList.toggle('hidden', list.length + sansIncident.length > 0);
+  const lignesFiches = sansIncident.map(a=>`
+    <tr>
+      <td><span style="color:var(--grey);">—</span></td>
+      <td>${escapeHtml(a.type||'')}</td>
+      <td>${escapeHtml(a.nom||'')}</td>
+      <td>${a.commentaire ? escapeHtml(a.commentaire) : '<span style="color:var(--grey);">Mis en réparation depuis la fiche de l\'appareil</span>'}</td>
+      <td><span class="badge badge-orange">En réparation</span></td>
+      <td>${a.reparation_depuis ? fmtDate(a.reparation_depuis) : '—'}</td>
+      <td>—</td>
+      <td><span style="color:var(--grey);">—</span></td>
+      <td>—</td>
+      <td class="gest-only ${(isGestion||isDirection||isDirectionOp)?'':'hidden'}"><button class="icon-btn" onclick="openMaterielAssetView('${a.id}')" title="Fiche de l'appareil">🏷️</button></td>
+    </tr>`).join('');
+  document.getElementById('rpBody').innerHTML = lignesFiches + list.map(m=>{
     const asset = m.materiel_asset_id ? (state.materiel_assets||[]).find(x=>x.id===m.materiel_asset_id) : null;
     const replacement = m.replacement_asset_id ? (state.materiel_assets||[]).find(x=>x.id===m.replacement_asset_id) : null;
     return `
@@ -12491,7 +12559,7 @@ const AIDE_FICHES = [
   {titre:'Alertes pour la gestion', q:['ou voir les nouveaux signalements','barre rouge','alerte sonore'], mots:'alerte barre rouge nouveau signalement attente prise charge son sonore tableau bord', r:'En gestion et direction, une barre rouge sous les onglets récapitule sur toutes les pages les sinistres et signalements à prendre en compte ; un clic mène à l\'onglet. Une alerte sonore signale chaque nouveauté.', vue:'dashboard', guide:'gestion'},
   {titre:'Prendre en charge un signalement', q:['confirmer la prise en charge','repondre au declarant','demander un complement'], mots:'prise charge confirmer accuser reception declarant email complement repondre', r:'Ouvrez la fiche, puis « Confirmer la prise en charge » (un e-mail est préparé si le déclarant a laissé le sien). Pour un sinistre, « Demander un complément » envoie une question.', guide:'gestion'},
   {titre:'Remplacer un appareil en panne', q:['remplacer une radio','installer un appareil de reserve','creer et installer'], mots:'remplacer remplacement installer creer nouveau panne', r:'Fiche de l\'incident (gestion) → vérifiez « Quel appareil ? » → « Remplacer par un appareil de réserve » ou « Créer et installer ». L\'appareil en panne passe « En réparation » et revient en réserve à la résolution.', vue:'materiel-travaux', guide:'gestion'},
-  {titre:'Réserve et réparation', q:['ou sont les appareils de reserve','materiel en reparation'], mots:'reserve stock disponible reparation retour appareil liste trouver secours', r:'Onglet <b>Réserve</b> : appareils disponibles et appareils en réparation (ils reviennent seuls en réserve quand l\'incident est résolu). Onglet <b>Réparation</b> : suivi des réparations.', vue:'materiel-reserve', guide:'gestion'},
+  {titre:'Réserve et réparation', q:['ou sont les appareils de reserve','materiel en reparation'], mots:'reserve stock disponible reparation retour appareil liste trouver secours', r:'Onglet <b>Réserve</b> : appareils disponibles et appareils en réparation (ils reviennent seuls en réserve quand l\'incident est résolu). Onglet <b>Réparation</b> : suivi des réparations. Pour envoyer un appareil en réparation sans signalement : Fiches matériel → la fiche → ✏️ Modifier → Véhicule actuel « 🔧 En réparation » ; à son retour, choisissez une ambulance ou « Non affecté (réserve) ». Dans Fiches matériel, les boutons Ambulances / Réserve / En réparation filtrent la liste.', vue:'materiel-reserve', guide:'gestion'},
   {titre:'Fiche Travaux', q:['programmer un rendez vous garage','immobiliser pendant l intervention','cloture automatique'], mots:'travaux rendez vous garage intervention prestataire immobilise alerte cloture date', r:'Onglet Signalements véhicules (gestion). « Véhicule immobilisé » = rouge le jour prévu ; « Utilisable uniquement pour les relèves » = orange avec cadre ; « Alerte sur l\'État de la flotte » = bande sans changer la couleur. Clôture automatique après la date de fin.', vue:'suivi', guide:'gestion'},
   {titre:'Programmer la réparation d\'un sinistre', q:['programmer une reparation apres un sinistre','rendez vous carrosserie sinistre','intervention liee au sinistre'], mots:'sinistre programmer reparation intervention rendez carrosserie garage lier lien', r:'Ouvrez le sinistre (onglet <b>Sinistres</b>, mode gestion ou direction) → « 📅 Programmer une intervention ». Le sinistre est enregistré, puis une fiche d\'intervention s\'ouvre, pré-remplie et liée : date, prestataire, immobilisation ou relèves. Elle apparaît sur l\'État de la flotte, dans les RDV du tableau de bord, le carnet et les factures, comme tous les travaux. La liste des interventions s\'affiche dans le sinistre ; la fiche d\'intervention a un bouton « Ouvrir le sinistre ».', vue:'sinistres', guide:'gestion'},
   {titre:'Prêts de véhicule', q:['preter une ambulance','formation exercice'], mots:'pret preter formation exercice mise disposition', r:'Onglet <b>Prêts</b> : le véhicule passe indisponible pendant la période du prêt, et l\'indisponibilité est annoncée quelques jours avant.', vue:'prets', guide:'gestion'},
@@ -12504,7 +12572,7 @@ const AIDE_FICHES = [
   {titre:'Plusieurs postes en même temps', q:['deux personnes en meme temps','modification ecrasee','un autre poste venait d enregistrer'], mots:'plusieurs poste meme temps simultane ecrase fusion autre', r:'Pas de risque : si un autre poste enregistre en même temps, vos modifications sont ajoutées aux siennes et un message le signale.', guide:'depannage'},
   {titre:'Données pas à jour', q:['les donnees ne sont pas a jour','mise a jour','temps reel'], mots:'jour actualiser rafraichir recharger f5 temps reel synchronise mise', r:'La pastille « Temps réel actif » doit être verte. Sinon, ou après une mise à jour annoncée, rechargez la page (touche F5). Les bornes se resynchronisent seules toutes les 2 minutes.', guide:'depannage'},
   {titre:'Prendre une photo', q:['prendre une photo','ajouter une photo','appareil photo','joindre une photo','camera'], mots:'photo photos appareil camera prendre joindre image signalement sinistre impact tablette', r:'Dans chaque déclaration (signalement véhicule, incident matériel, sinistre, impact carrosserie), le bouton <b>« 📷 Prendre une photo »</b> ouvre directement l\'appareil photo de la tablette ou du téléphone. Vous pouvez en prendre plusieurs ; chacune s\'ajoute à la liste (✕ pour en retirer une). Sur un PC, le bouton ouvre le choix d\'un fichier.', guide:'signaler'},
-  {titre:'Brancard et système de chargement', q:['numero de serie brancard','power pro','power load','systeme de chargement','deplacer un brancard'], mots:'brancard stryker power pro load chargement levage fixe electrique numero serie systeme', r:'Un brancard Stryker = deux fiches matériel : le <b>Brancard</b> électrique (Power-PRO), qui peut changer d\'ambulance (glisser son icône sur l\'État de la flotte), et le <b>Système de chargement</b> (Power-LOAD), fixé dans l\'ambulance, qui reste avec le véhicule. Chacun a son numéro de série et sa date de révision : Fiches matériel → la fiche → ✏️ Modifier.', vue:'materiel-fiches'},
+  {titre:'Brancard et système de chargement', q:['numero de serie brancard','power pro','power load','systeme de chargement','deplacer un brancard'], mots:'brancard stryker power pro load chargement levage fixe electrique numero serie systeme', r:'Un brancard Stryker = deux fiches matériel : le <b>Brancard</b> électrique (Power-PRO), qui peut changer d\'ambulance (glisser son icône sur l\'État de la flotte), et le <b>Système de chargement</b> (Power-LOAD), fixé dans l\'ambulance, qui reste avec le véhicule. Chacun a son numéro de série et sa date de révision, à refaire tous les 2 ans : Fiches matériel → la fiche → ✏️ Modifier.', vue:'materiel-fiches'},
   {titre:'Contrôles et matériel d\'une ambulance', q:['ou voir les controles d une ambulance','materiel d une ambulance','date de revision du scope','onglet materiel medical'], mots:'controle controles materiel embarque medical fiche revision scope brancard aspiration chaise extincteur peremption desinfection suivi ambulance', r:'Onglet <b>Contrôles & matériel</b> (anciennement « Matériel médical ») : un tableau, une ligne par ambulance : une pastille de couleur et la date du dernier contrôle (péremptions, suivi hebdomadaire, désinfection complète, désinfection des sacs), puis le matériel embarqué en 3 pastilles (vert, orange, rouge). Survolez une case pour le détail ; « Détail » ouvre la liste des contrôles et des appareils (un clic ouvre la fiche de l\'appareil, ✏️ corrige les dates des contrôles).', vue:'materiel'},
   {titre:'Corriger ou supprimer un relevé km', q:['erreur de kilometrage','corriger un releve km','supprimer un releve','mauvais km','ajouter un releve km'], mots:'kilometrage km releve releves erreur faute corriger supprimer effacer modifier ajouter compteur', r:'Mode gestion, onglet <b>Carnet d\'entretien</b>, ambulance concernée, partie « Suivi des niveaux et relevés km » : ✏️ sur la ligne pour corriger la date, le km ou les initiales, ou « 🗑️ Supprimer ce relevé ». « + Ajouter un relevé km » saisit un relevé seul (ex. relevé général). Le kilométrage de l\'ambulance est recalculé automatiquement à partir du relevé le plus récent.', vue:'carnet'},
   {titre:'Proposer une amélioration', q:['j ai une idee','proposer une amelioration','suggestion','il manque quelque chose','ce serait pratique'], mots:'idee proposition proposer amelioration ameliorer suggestion suggerer manque pratique evolution remarque', r:'Onglet <b>Aide</b>, partie « 💡 Proposer une amélioration » : votre nom, la partie du logiciel concernée, votre idée, puis « Envoyer la proposition ». Le responsable de flotte la reçoit aussitôt et la suit (à l\'étude, retenue, réalisée…).', vue:'aide'},
@@ -12823,7 +12891,7 @@ setInterval(()=>{
 // ouvert depuis le PC : pas de vérification. Si une version plus récente est en ligne : bandeau
 // « Mettre à jour » (jamais de rechargement imposé sur un poste normal) ; une borne se recharge
 // seule après 5 min sans activité, si aucune fenêtre n'est ouverte et que tout est enregistré.
-const VERSION_LOGICIEL = '20261109-123227';
+const VERSION_LOGICIEL = '20261110-164900';
 let versionEnLigne = null;
 let derniereActivitePoste = Date.now();
 ['pointerdown','keydown','touchstart'].forEach(ev => document.addEventListener(ev, ()=>{ derniereActivitePoste = Date.now(); }, {passive:true, capture:true}));
