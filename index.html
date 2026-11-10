@@ -12906,7 +12906,7 @@ setInterval(()=>{
 // ouvert depuis le PC : pas de vérification. Si une version plus récente est en ligne : bandeau
 // « Mettre à jour » (jamais de rechargement imposé sur un poste normal) ; une borne se recharge
 // seule après 5 min sans activité, si aucune fenêtre n'est ouverte et que tout est enregistré.
-const VERSION_LOGICIEL = '20261110-171212';
+const VERSION_LOGICIEL = '20261110-172208';
 let versionEnLigne = null;
 let derniereActivitePoste = Date.now();
 ['pointerdown','keydown','touchstart'].forEach(ev => document.addEventListener(ev, ()=>{ derniereActivitePoste = Date.now(); }, {passive:true, capture:true}));
