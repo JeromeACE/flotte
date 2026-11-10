@@ -197,6 +197,11 @@ table tr:hover td{background:#fafbfc;}
 .veh-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;}
 .veh-card h3{margin:0 0 8px;font-size:16px;color:var(--navy);display:flex;justify-content:space-between;align-items:center;}
 .veh-card .meta{font-size:12.5px;color:#4b5563;line-height:1.7;margin-bottom:10px;}
+/* Fiches matériel : appareil en réparation bien visible (2026-11-10) */
+.veh-card.ma-en-reparation{border:2px solid var(--orange);background:#fffbeb;}
+.ma-ruban-reparation{margin:-16px -16px 12px;padding:7px 16px;border-radius:10px 10px 0 0;background:var(--orange);color:#fff;font-size:12.5px;font-weight:700;letter-spacing:.2px;}
+.ma-type-icon.ma-icone-rep{position:relative;display:inline-block;}
+.ma-type-icon.ma-icone-rep::after{content:'🔧';position:absolute;right:-7px;bottom:-5px;font-size:12px;background:#fff;border-radius:50%;line-height:1;padding:1px;}
 .veh-card .meta b{color:#111827;}
 .ech-row{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;padding:5px 0;border-top:1px solid #f1f2f4;}
 .meq-scroll{overflow-x:auto;background:#fff;border:1px solid var(--border);border-radius:12px;}
@@ -6659,15 +6664,25 @@ function renderMaTypeFilters(){
 function maAttachmentLabel(a, greyWhenEmpty){
   if(a.vehicule_actuel) return escapeHtml(a.vehicule_actuel);
   if(a.emplacement_centrale) return `🏢 ${escapeHtml(a.emplacement_centrale)} (bâtiment)`;
+  if(!a.archive && materielAssetStatus(a)==='en_reparation') return greyWhenEmpty ? '<b style="color:#92400e;">🔧 En réparation</b>' : '🔧 En réparation';
   return greyWhenEmpty ? '<span style="color:var(--grey);">Non affecté</span>' : 'Non affecté';
 }
 function maCardHtml(a){
   const status = echeanceCompute(a.type, a.date_dernier, a.date_prochain);
   const dernierTxt = a.date_dernier ? `Dernier contrôle : ${fmtDate(a.date_dernier)}` : 'Aucun contrôle enregistré';
   const opStatus = materielAssetStatus(a);
+  // Appareil en réparation (choix de la fiche ou incident en devis/réparation, 2026-11-10) :
+  // cadre + bandeau orange + petite clé sur l'icône, repérable d'un coup d'œil.
+  const enRep = opStatus==='en_reparation';
+  let ruban = '';
+  if(enRep){
+    const inc = materielAssetOpenIncident(a);
+    const depuis = a.reparation_depuis || (inc && inc.date_creation) || '';
+    ruban = `<div class="ma-ruban-reparation">🔧 EN RÉPARATION${depuis ? ' depuis le ' + fmtDate(depuis) : ''}${inc && inc.statut ? ' · ' + escapeHtml(inc.statut) : ''}</div>`;
+  }
   return `
-  <div class="veh-card" onclick="openMaterielAssetView('${a.id}')" style="cursor:pointer;${a.archive?'opacity:.6;':''}">
-    <h3><span class="ma-type-icon">${materielTypeIcon(a.type, 24)}</span> ${escapeHtml(a.nom)} <span class="badge ${materielAssetStatusBadgeClass(opStatus)}">${materielAssetStatusLabel(opStatus)}</span> <button class="icon-btn gest-only ${(isGestion||isDirection||isDirectionOp)?'':'hidden'}" onclick="event.stopPropagation();editMaterielAsset('${a.id}')">✏️</button></h3>
+  <div class="veh-card${enRep?' ma-en-reparation':''}" onclick="openMaterielAssetView('${a.id}')" style="cursor:pointer;${a.archive?'opacity:.6;':''}">
+    ${ruban}<h3><span class="ma-type-icon${enRep?' ma-icone-rep':''}">${materielTypeIcon(a.type, 24)}</span> ${escapeHtml(a.nom)} <span class="badge ${materielAssetStatusBadgeClass(opStatus)}">${materielAssetStatusLabel(opStatus)}</span> <button class="icon-btn gest-only ${(isGestion||isDirection||isDirectionOp)?'':'hidden'}" onclick="event.stopPropagation();editMaterielAsset('${a.id}')">✏️</button></h3>
     <div class="meta">
       <div><b>Type :</b> ${escapeHtml(a.type)}</div>
       <div><b>Rattaché à :</b> ${maAttachmentLabel(a, true)}</div>
@@ -12891,7 +12906,7 @@ setInterval(()=>{
 // ouvert depuis le PC : pas de vérification. Si une version plus récente est en ligne : bandeau
 // « Mettre à jour » (jamais de rechargement imposé sur un poste normal) ; une borne se recharge
 // seule après 5 min sans activité, si aucune fenêtre n'est ouverte et que tout est enregistré.
-const VERSION_LOGICIEL = '20261110-164900';
+const VERSION_LOGICIEL = '20261110-171212';
 let versionEnLigne = null;
 let derniereActivitePoste = Date.now();
 ['pointerdown','keydown','touchstart'].forEach(ev => document.addEventListener(ev, ()=>{ derniereActivitePoste = Date.now(); }, {passive:true, capture:true}));
