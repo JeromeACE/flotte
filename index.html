@@ -1354,7 +1354,7 @@ footer.appfoot{text-align:center;font-size:11.5px;color:#9ca3af;padding:20px;}
     <div class="section acc-bloc">
       <div class="acc-titre">
         <h2>⚠️ Accident de circulation : que faire ?</h2>
-        <button type="button" class="btn btn-ghost" id="btnAccRecommencer">↺ Recommencer</button>
+        <button type="button" class="btn btn-outline" id="btnAccRecommencer">↺ Recommencer</button>
       </div>
       <p class="acc-intro">Répondez aux questions : les consignes à suivre s'affichent. Cochez au fur et à mesure.</p>
       <div id="accQuestions"></div>
@@ -4263,7 +4263,7 @@ async function urlProcedure(chemin){
 function renderAccidentDocs(){
   const choix = document.getElementById('accDocsChoix'), z = document.getElementById('accDocs');
   if(!choix) return;
-  choix.innerHTML = ACC_DOCS.map(d=>`<button type="button" class="btn btn-ghost ${d.k === accDocActif ? 'on' : ''}" onclick="accChoisirDoc('${d.k}')">${escapeHtml(d.t)}</button>`).join('');
+  choix.innerHTML = ACC_DOCS.map(d=>`<button type="button" class="btn btn-outline ${d.k === accDocActif ? 'on' : ''}" onclick="accChoisirDoc('${d.k}')">${escapeHtml(d.t)}</button>`).join('');
   const docs = state.procedures_docs || {};
   const doc = docs[accDocActif];
   const pages = (doc && Array.isArray(doc.pages)) ? doc.pages : [];
@@ -4271,7 +4271,7 @@ function renderAccidentDocs(){
     ? pages.map((p, i)=>`<a href="#" data-acc-page="${escapeHtml(p)}" title="Ouvrir en grand"><img class="acc-doc-img" alt="${escapeHtml(ACC_DOCS.find(d=>d.k === accDocActif).t)} — page ${i + 1}" data-acc-img="${escapeHtml(p)}"></a>`).join('')
     : '<div class="empty">Document pas encore installé.</div>';
   if(isGestion) h += `<div class="acc-gestion">Gestion : ${doc ? `installé le ${escapeHtml(fmtDate((doc.date||'').slice(0,10)))}${doc.fichier ? ` (${escapeHtml(doc.fichier)})` : ''}. ` : ''}
-    <label class="btn btn-ghost" style="display:inline-block;cursor:pointer;">📤 ${doc ? 'Remplacer' : 'Installer'} le document (PDF ou image)
+    <label class="btn btn-outline" style="display:inline-block;cursor:pointer;">📤 ${doc ? 'Remplacer' : 'Installer'} le document (PDF ou image)
       <input type="file" accept="application/pdf,image/*" class="hidden" onchange="accInstallerDoc('${accDocActif}', this)"></label>
     <span id="accDocEtat"></span></div>`;
   z.innerHTML = h;
@@ -13186,7 +13186,7 @@ setInterval(()=>{
 // ouvert depuis le PC : pas de vérification. Si une version plus récente est en ligne : bandeau
 // « Mettre à jour » (jamais de rechargement imposé sur un poste normal) ; une borne se recharge
 // seule après 5 min sans activité, si aucune fenêtre n'est ouverte et que tout est enregistré.
-const VERSION_LOGICIEL = '20261116-140036';
+const VERSION_LOGICIEL = '20261116-150834';
 let versionEnLigne = null;
 let derniereActivitePoste = Date.now();
 ['pointerdown','keydown','touchstart'].forEach(ev => document.addEventListener(ev, ()=>{ derniereActivitePoste = Date.now(); }, {passive:true, capture:true}));
