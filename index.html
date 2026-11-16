@@ -201,6 +201,33 @@ table tr:hover td{background:#fafbfc;}
 .veh-card.ma-en-reparation{border:2px solid var(--orange);background:#fffbeb;}
 .ma-ruban-reparation{margin:-16px -16px 12px;padding:7px 16px;border-radius:10px 10px 0 0;background:var(--orange);color:#fff;font-size:12.5px;font-weight:700;letter-spacing:.2px;}
 .ma-type-icon.ma-icone-rep{position:relative;display:inline-block;}
+.acc-wrap{display:flex;flex-direction:column;gap:16px;max-width:900px;}
+.acc-bloc h2{margin:0 0 8px;font-size:18px;}
+.acc-titre{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:space-between;}
+.acc-intro{margin:0 0 12px;color:var(--grey);font-size:13.5px;}
+.acc-q{background:#f1f5f9;border-radius:10px;padding:12px 14px;margin-bottom:10px;}
+.acc-q p{margin:0 0 8px;font-weight:700;font-size:15px;}
+.acc-q button{min-width:110px;padding:10px 16px;font-size:15px;margin:0 8px 6px 0;border-radius:8px;border:1.5px solid #94a3b8;background:#fff;cursor:pointer;}
+.acc-q button.on{background:#1e40af;border-color:#1e40af;color:#fff;}
+.acc-carte{border-radius:10px;padding:12px 16px;margin-bottom:10px;border:2px solid;}
+.acc-carte.rouge{background:#fef2f2;border-color:#dc2626;color:#7f1d1d;}
+.acc-carte.bleu{background:#eff6ff;border-color:#2563eb;color:#1e3a8a;}
+.acc-carte h3{margin:0 0 6px;font-size:16px;}
+.acc-carte label{display:flex;gap:10px;align-items:flex-start;padding:5px 0;font-size:15px;cursor:pointer;}
+.acc-carte input{width:20px;height:20px;flex:none;margin-top:1px;}
+.acc-carte label.fait{text-decoration:line-through;opacity:.6;}
+.acc-notes{font-size:12.5px;color:var(--grey);margin:4px 0 0;}
+.acc-label{display:flex;flex-direction:column;gap:4px;max-width:320px;font-weight:600;margin-bottom:10px;}
+.acc-table{width:100%;border-collapse:collapse;font-size:14px;margin-bottom:10px;}
+.acc-table td{padding:6px 8px;border-bottom:1px solid #e2e8f0;vertical-align:top;}
+.acc-table td:first-child{width:38%;font-weight:600;color:#334155;}
+.acc-rappels{margin:6px 0 10px 18px;padding:0;font-size:14px;}
+.acc-rappels li{margin:3px 0;}
+.acc-actions{display:flex;gap:8px;flex-wrap:wrap;}
+.acc-docs-choix{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;}
+.acc-docs-choix button.on{background:#1e40af;color:#fff;border-color:#1e40af;}
+.acc-doc-img{width:100%;border:1px solid #cbd5e1;border-radius:6px;margin-bottom:8px;display:block;background:#fff;}
+.acc-gestion{margin-top:10px;padding:10px 12px;border:1px dashed #94a3b8;border-radius:8px;font-size:13.5px;}
 .ma-type-icon.ma-icone-rep::after{content:'🔧';position:absolute;right:-7px;bottom:-5px;font-size:12px;background:#fff;border-radius:50%;line-height:1;padding:1px;}
 .veh-card .meta b{color:#111827;}
 .ech-row{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;padding:5px 0;border-top:1px solid #f1f2f4;}
@@ -628,6 +655,7 @@ footer.appfoot{text-align:center;font-size:11.5px;color:#9ca3af;padding:20px;}
     <button data-view="board">🚑 État de la flotte</button>
     <button data-view="suivi" class="borne-hide">📋 Signalements véhicules <span id="svNavBadge" class="nav-badge hidden">0</span></button>
     <button data-view="sinistres" class="priv-only hidden">🚨 Sinistres <span id="siNavBadge" class="nav-badge hidden">0</span></button>
+    <button data-view="accident">⚠️ Procédure accident</button>
   </div>
   <div class="nav-group">
     <span class="nav-group-label">🩺 Matériel</span>
@@ -1314,6 +1342,36 @@ footer.appfoot{text-align:center;font-size:11.5px;color:#9ca3af;padding:20px;}
     <div class="aide-guide">
       <h2>Guide d'utilisation</h2>
       <div id="aideGuide"></div>
+    </div>
+  </div>
+</section>
+
+<!-- Procédure accident + constat amiable (2026-11-16). Questions une par une, consignes tirées
+     des procédures validées (en / hors intervention), aide au constat ; documents d'origine en
+     images dans l'espace privé « procedures » (securite/09_espace_procedures.sql). -->
+<section class="view" id="view-accident">
+  <div class="acc-wrap">
+    <div class="section acc-bloc">
+      <div class="acc-titre">
+        <h2>⚠️ Accident de circulation : que faire ?</h2>
+        <button type="button" class="btn btn-ghost" id="btnAccRecommencer">↺ Recommencer</button>
+      </div>
+      <p class="acc-intro">Répondez aux questions : les consignes à suivre s'affichent. Cochez au fur et à mesure.</p>
+      <div id="accQuestions"></div>
+      <div id="accConsignes"></div>
+    </div>
+    <div class="section acc-bloc">
+      <h2>📝 Remplir le constat amiable</h2>
+      <label class="acc-label">Ambulance concernée <select id="fAccAmb"></select></label>
+      <div id="accConstat"></div>
+      <div class="acc-actions">
+        <button type="button" class="btn btn-danger borne-hide" id="btnAccDeclarer">🚨 Déclarer le sinistre dans le logiciel</button>
+      </div>
+    </div>
+    <div class="section acc-bloc">
+      <h2>📄 Documents de référence</h2>
+      <div class="acc-docs-choix" id="accDocsChoix"></div>
+      <div id="accDocs"></div>
     </div>
   </div>
 </section>
@@ -3193,14 +3251,14 @@ function setSyncStatus(on){
    (voir isBorneMode ci-dessus : uniquement État de la flotte + Carrosserie en lecture
    seule). */
 // 'aide' (guide + assistant, 2026-10-06) est accessible à tous les profils, borne comprise.
-const VIEWS_BORNE = ['board','carrosserie','aide'];
-const VIEWS_PUBLIC = ['board','carrosserie','materiel','suivi','aide'];
+const VIEWS_BORNE = ['board','carrosserie','accident','aide'];
+const VIEWS_PUBLIC = ['board','carrosserie','materiel','suivi','accident','aide'];
 // VIEWS_GESTION est la référence unique de tous les onglets existants ; VIEWS_DIRECTION
 // en est dérivée automatiquement (tout sauf Réglages) pour ne jamais désynchroniser les
 // deux listes quand un nouvel onglet est ajouté (bug corrigé au passage : materiel-
 // reserve/materiel-reparation manquaient ici, ce qui renvoyait la gestion vers le
 // tableau de bord si un renderAll() survenait pendant qu'elle consultait ces onglets).
-const VIEWS_GESTION = ['dashboard','vehicules','board','carrosserie','materiel','suivi','materiel-travaux','materiel-fiches','materiel-reserve','materiel-reparation','prets','sinistres','prestataires','factures','carnet','reglages','aide'];
+const VIEWS_GESTION = ['dashboard','vehicules','board','carrosserie','materiel','suivi','materiel-travaux','materiel-fiches','materiel-reserve','materiel-reparation','prets','sinistres','accident','prestataires','factures','carnet','reglages','aide'];
 const VIEWS_DIRECTION = VIEWS_GESTION.filter(v=>v!=='reglages');
 function allowedViews(){
   if(isGestion) return VIEWS_GESTION;
@@ -3891,7 +3949,7 @@ const JM_CHAMPS = {
   date_facture:'Date de facture', statut:'Statut', sinistre_statut:'Statut', roulant:'Peut rouler',
   immobilise:'Immobilisé', vehicule_actuel:'Rattachement', date_dernier:'Dernier contrôle',
   date_prochain:'Prochain contrôle', numero_serie:'N° de série', cadre_garde_accord:'Accord du cadre',
-  cadres_garde:'Cadres de garde', adminPinHash:'Code gestion', bornePinHash:'Code borne',
+  cadres_garde:'Cadres de garde', procedures_docs:'Documents procédure accident', adminPinHash:'Code gestion', bornePinHash:'Code borne',
   directionPinHash:'Code direction', directionOpPinHash:'Code direction opérationnelle'
 };
 let jmLignes = [];
@@ -4069,7 +4127,228 @@ function renderAll(){
   renderCarnet();
   renderMaGrid();
   renderPropositions();
+  renderAccident();
   refreshGestionUI();
+}
+
+// ===== Procédure accident + constat amiable (2026-11-16) =====
+// Consignes reprises des procédures « Accident de circulation en / hors intervention »
+// validées le 20.11.2024 (documents d'origine dans l'onglet, espace privé « procedures »).
+const ACC_QUESTIONS = [
+  {k:'ctx', t:'L\'accident a lieu…', o:[['en','🚑 En intervention'],['hors','🅿️ Hors intervention']]},
+  {k:'tiers', t:'Y a-t-il un tiers impliqué (autre véhicule, objet, personne) ?', o:[[1,'Oui'],[0,'Non']]},
+  {k:'bl', t:'Y a-t-il des blessés ?', o:[[1,'Oui'],[0,'Non']]},
+  {k:'deg', t:'Les dégâts sont-ils importants ?', o:[[1,'Oui'],[0,'Non']]},
+  {k:'naca', t:'Le patient en charge est-il NACA 4 ou plus ?', o:[[1,'Oui'],[0,'Non']]}
+];
+const ACC_OBJET = 'Dégâts sur un objet (pas un véhicule) : prendre les coordonnées du propriétaire et remplir un constat amiable';
+const ACC_FIN = ['Aviser le cadre de garde', 'Remplir le rapport d\'incident Ambulog'];
+let accRep = {};
+function accBesoin(k){
+  if(k === 'bl') return accRep.tiers !== undefined;
+  if(k === 'deg') return accRep.bl === 0;
+  if(k === 'naca') return accRep.ctx === 'en' && accRep.tiers === 1 && accRep.bl === 0 && accRep.deg === 0;
+  return true;
+}
+function accConsignes(){
+  const R = accRep;
+  if(R.bl === 1) return [['rouge','⚠️ Blessés : arrêt immédiat',['Stop ambulance','Gestion de la sécurité','Gestion des blessés','Prévenir le CASU (1) et la CECAL','Demande de moyens','Prévenir le cadre de garde','Ne plus bouger l\'ambulance avant l\'accord de la BRA']]];
+  if(R.deg === undefined) return null;
+  if(R.ctx === 'en'){
+    if(R.deg === 1) return [['rouge','Dégâts importants : arrêt de l\'ambulance',[
+      'Stop ambulance', R.tiers ? 'Prévenir le CASU (1) / la CECAL' : 'Prévenir le CASU (1)',
+      'Demander une ambulance pour la prise en charge du patient (2) / reprendre l\'intervention',
+      'Prévenir le cadre de garde',
+      R.tiers ? 'Suivre les recommandations de la BRA (rapport de police ?)' : 'Stratégie selon les directives du cadre de garde',
+      'Remplir un constat amiable (voir plus bas)', ACC_OBJET, 'Remplir le rapport d\'incident Ambulog']]];
+    if(R.tiers === 0) return [
+      ['bleu','Pendant l\'intervention',['Continuer l\'intervention','Si l\'état du patient en charge ou le délai d\'intervention le permet : prendre un maximum de photos']],
+      ['bleu','Après l\'intervention',['Retour sur le site de l\'accident','Reprendre la procédure', ACC_OBJET].concat(ACC_FIN)]];
+    if(R.naca === undefined) return null;
+    const pendant = R.naca
+      ? ['rouge','Pendant l\'intervention (patient NACA 4 et +)',['Si possible, laisser rapidement une carte de visite (4)','Prévenir le CASU (1)','Poursuivre l\'intervention']]
+      : ['bleu','Pendant l\'intervention',['Prendre un maximum de photos','Prendre les coordonnées','Si le propriétaire est absent : laisser une carte de visite (4) et prévenir le CASU (1)']];
+    return [pendant, ['bleu','Après l\'intervention',['Contacter le tiers rapidement','Si le véhicule impliqué est toujours sur le site de l\'accident : s\'y rendre','S\'il n\'y est plus : prendre rendez-vous pour poursuivre les démarches','Remplir le constat amiable (voir plus bas)', ACC_OBJET + ' (deuxième constat)'].concat(ACC_FIN)]];
+  }
+  if(R.deg === 1) return [['rouge','Dégâts importants : arrêt de l\'ambulance',['Stop ambulance','Prévenir le CASU (1)','Prévenir le cadre de garde','Stratégie selon les directives du cadre de garde','Remplir un constat amiable (voir plus bas)', ACC_OBJET, 'Remplir le rapport d\'incident Ambulog']]];
+  return [['bleu','À faire', R.tiers
+    ? ['Prendre un maximum de photos','Remplir le constat amiable (voir plus bas)', ACC_OBJET + ' (deuxième constat)'].concat(ACC_FIN)
+    : ['Prendre un maximum de photos', ACC_OBJET].concat(ACC_FIN)]];
+}
+function renderAccidentQuestions(){
+  const zq = document.getElementById('accQuestions'), zc = document.getElementById('accConsignes');
+  if(!zq) return;
+  let h = '';
+  for(const q of ACC_QUESTIONS){
+    if(!accBesoin(q.k)) continue;
+    h += `<div class="acc-q"><p>${escapeHtml(q.t)}</p>${q.o.map(o=>`<button type="button" class="${accRep[q.k] === o[0] ? 'on' : ''}" onclick="accRepondre('${q.k}', ${typeof o[0] === 'string' ? `'${o[0]}'` : o[0]})">${escapeHtml(o[1])}</button>`).join('')}</div>`;
+    if(accRep[q.k] === undefined) break;
+  }
+  zq.innerHTML = h;
+  const c = accConsignes();
+  zc.innerHTML = c ? c.map(([coul, titre, lignes])=>`<div class="acc-carte ${coul}"><h3>${escapeHtml(titre)}</h3>${lignes.map(l=>`<label><input type="checkbox" onchange="this.parentNode.classList.toggle('fait', this.checked)"> <span>${escapeHtml(l)}</span></label>`).join('')}</div>`).join('')
+    + `<p class="acc-notes">(1) Appel CASU-URGENT avec le téléphone de l'ambulance, pour l'enregistrement.${accRep.ctx === 'en' ? ' (2) Prioriser la demande d\'une ambulance ACE, pour éviter une double facturation. (3) Patient stable : maximum NACA 3 / EST 3 et 4. (4) Sur la carte de visite, écrire un mot courtois demandant au tiers de nous rappeler suite à l\'accrochage.' : ''}</p>` : '';
+}
+function accRepondre(k, v){
+  const i = ACC_QUESTIONS.findIndex(q=>q.k === k);
+  ACC_QUESTIONS.slice(i).forEach(q=>delete accRep[q.k]);
+  accRep[k] = v;
+  renderAccidentQuestions();
+}
+document.getElementById('btnAccRecommencer').onclick = () => { accRep = {}; renderAccidentQuestions(); };
+
+// Aide au constat amiable : informations ACE (fixes) + celles de l'ambulance choisie.
+const ACC_ACE = {
+  nom: 'ACE Genève Ambulances',
+  adresse: '123, Route de Chêne, 1224 Chêne-Bougeries, Suisse',
+  tel: '022 919 11 11',
+  assurance: 'Zurich Compagnie d\'Assurances SA, Case postale, 8085 Zurich, Suisse'
+};
+function renderAccidentConstat(){
+  const sel = document.getElementById('fAccAmb'), z = document.getElementById('accConstat');
+  if(!sel) return;
+  const actives = state.vehicules.filter(v=>!v.archive).sort((a,b)=>String(a.nom).localeCompare(String(b.nom), 'fr', {numeric:true}));
+  const avant = sel.value;
+  sel.innerHTML = '<option value="">— Choisir l\'ambulance —</option>' + actives.map(v=>`<option value="${escapeHtml(v.id)}">${escapeHtml(v.nom)}</option>`).join('');
+  if(actives.some(v=>v.id === avant)) sel.value = avant;
+  const v = actives.find(x=>x.id === sel.value);
+  const val = x => x ? escapeHtml(x) : '<i style="color:var(--grey);">à compléter</i>';
+  z.innerHTML = `
+    <table class="acc-table">
+      <tr><td>Nos informations : colonne « Véhicule A »</td><td>Le tiers remplit la colonne « Véhicule B »</td></tr>
+      <tr><td>1-5. Date, heure, lieu</td><td>Date, heure et <b>adresse précise</b>. Témoins : prendre leurs coordonnées complètes.</td></tr>
+      <tr><td>6. Preneur d'assurance</td><td>${escapeHtml(ACC_ACE.nom)}<br>${escapeHtml(ACC_ACE.adresse)}<br>Tél. ${escapeHtml(ACC_ACE.tel)}</td></tr>
+      <tr><td>7. Véhicule</td><td>${v ? `Marque, type : ${val(v.type)}<br>Plaque : ${val(v.immat)} · Pays : Suisse` : '<i style="color:var(--grey);">Choisissez l\'ambulance ci-dessus.</i>'}</td></tr>
+      <tr><td>8. Société d'assurance</td><td>${escapeHtml(ACC_ACE.assurance)}<br>N° de police : ${v && v.police_assurance ? escapeHtml(v.police_assurance) : 'sur la fiche technique, dans la pochette de l\'ambulance'}</td></tr>
+      <tr><td>9. Conducteur</td><td>Vos informations complètes : nom, prénom, adresse, n° de permis.</td></tr>
+    </table>
+    <b>À ne pas oublier</b>
+    <ul class="acc-rappels">
+      <li>12. Circonstances : cocher une ou plusieurs cases et <b>indiquer le nombre de cases cochées</b>.</li>
+      <li>Vérifier que toutes les informations du tiers sont présentes et lisibles.</li>
+      <li>Faire un <b>schéma le plus précis possible</b> et prendre un maximum de photos (scène et dégâts).</li>
+      <li>10-11. Indiquer le point de choc initial et les dégâts apparents.</li>
+      <li>14. Noter vos observations, <b>surtout en cas de désaccord</b>.</li>
+      <li>15. <b>Signature des deux conducteurs</b>.</li>
+      <li>Dégâts sur un autre objet qu'un véhicule : coordonnées du propriétaire et constat séparé (remplacer « Véhicule B » par « objet » ou « mobilier urbain »). Un 3e véhicule impliqué : deuxième constat.</li>
+      <li>Verso (« Indications complémentaires ») : à remplir avant l'envoi à l'assurance, peut être fait plus tard.</li>
+      <li>Ensuite : déclarer le sinistre dans le logiciel et y joindre la photo du constat signé.</li>
+    </ul>`;
+}
+document.getElementById('fAccAmb').onchange = renderAccidentConstat;
+document.getElementById('btnAccDeclarer').onclick = () => {
+  const v = state.vehicules.find(x=>x.id === document.getElementById('fAccAmb').value);
+  openDeclarationSinistreModal(v ? v.nom : undefined);
+};
+
+// Documents de référence : images dans l'espace privé « procedures ». Le réglage
+// state.procedures_docs = {en|hors|constat: {pages:[chemins], date, par, fichier}} dit
+// lesquelles afficher. La gestion remplace un document en envoyant un PDF (converti ici en
+// images, page par page) ou une image.
+const ACC_DOCS = [
+  {k:'en', t:'Procédure en intervention'},
+  {k:'hors', t:'Procédure hors intervention'},
+  {k:'constat', t:'Modèle de constat amiable'}
+];
+let accDocActif = 'en';
+const cacheUrlProcedure = new Map();
+async function urlProcedure(chemin){
+  const c = cacheUrlProcedure.get(chemin);
+  if(c && c.expire > Date.now()) return c.url;
+  const {data, error} = await supa.storage.from('procedures').createSignedUrl(chemin, 3600);
+  if(error || !data) throw error || new Error('lien indisponible');
+  cacheUrlProcedure.set(chemin, {url: data.signedUrl, expire: Date.now() + 50 * 60 * 1000});
+  return data.signedUrl;
+}
+function renderAccidentDocs(){
+  const choix = document.getElementById('accDocsChoix'), z = document.getElementById('accDocs');
+  if(!choix) return;
+  choix.innerHTML = ACC_DOCS.map(d=>`<button type="button" class="btn btn-ghost ${d.k === accDocActif ? 'on' : ''}" onclick="accChoisirDoc('${d.k}')">${escapeHtml(d.t)}</button>`).join('');
+  const docs = state.procedures_docs || {};
+  const doc = docs[accDocActif];
+  const pages = (doc && Array.isArray(doc.pages)) ? doc.pages : [];
+  let h = pages.length
+    ? pages.map((p, i)=>`<a href="#" data-acc-page="${escapeHtml(p)}" title="Ouvrir en grand"><img class="acc-doc-img" alt="${escapeHtml(ACC_DOCS.find(d=>d.k === accDocActif).t)} — page ${i + 1}" data-acc-img="${escapeHtml(p)}"></a>`).join('')
+    : '<div class="empty">Document pas encore installé.</div>';
+  if(isGestion) h += `<div class="acc-gestion">Gestion : ${doc ? `installé le ${escapeHtml(fmtDate((doc.date||'').slice(0,10)))}${doc.fichier ? ` (${escapeHtml(doc.fichier)})` : ''}. ` : ''}
+    <label class="btn btn-ghost" style="display:inline-block;cursor:pointer;">📤 ${doc ? 'Remplacer' : 'Installer'} le document (PDF ou image)
+      <input type="file" accept="application/pdf,image/*" class="hidden" onchange="accInstallerDoc('${accDocActif}', this)"></label>
+    <span id="accDocEtat"></span></div>`;
+  z.innerHTML = h;
+  if(!supa) return;
+  z.querySelectorAll('img[data-acc-img]').forEach(img=>{
+    urlProcedure(img.dataset.accImg).then(u=>{ img.src = u; }).catch(()=>{ img.replaceWith(Object.assign(document.createElement('div'), {className:'empty', textContent:'Image indisponible (connexion ou compte requis).'})); });
+  });
+  z.querySelectorAll('a[data-acc-page]').forEach(a=>a.onclick = e=>{
+    e.preventDefault();
+    const w = window.open('', '_blank');
+    urlProcedure(a.dataset.accPage).then(u=>{ if(w) w.location = u; else location.href = u; }).catch(()=>{ if(w) w.close(); showToast('Impossible d\'ouvrir le document (connexion ?).'); });
+  });
+}
+function accChoisirDoc(k){ accDocActif = k; renderAccidentDocs(); }
+async function accImagesDepuisFichier(file){
+  if(/pdf$/i.test(file.type) || /\.pdf$/i.test(file.name)){
+    const pdf = await pdfjsLib.getDocument({data: await file.arrayBuffer()}).promise;
+    const blobs = [];
+    for(let n = 1; n <= Math.min(pdf.numPages, 6); n++){
+      const page = await pdf.getPage(n);
+      const base = page.getViewport({scale: 1});
+      const vue = page.getViewport({scale: 2400 / Math.max(base.width, base.height)});
+      const c = document.createElement('canvas');
+      c.width = Math.floor(vue.width); c.height = Math.floor(vue.height);
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+      // intent 'print' : rendu sans requestAnimationFrame, qui s'arrête si l'onglet passe
+      // à l'arrière-plan pendant la conversion (gros PDF).
+      await page.render({canvasContext: ctx, viewport: vue, intent: 'print'}).promise;
+      blobs.push(await new Promise(ok=>c.toBlob(ok, 'image/jpeg', 0.85)));
+      c.width = c.height = 0;
+    }
+    return blobs;
+  }
+  return [await compresserImage(file)];
+}
+async function accInstallerDoc(k, input){
+  const file = input.files && input.files[0];
+  const etat = document.getElementById('accDocEtat');
+  if(!file || !isGestion) return;
+  if(!supa){ showToast('Pas de connexion au serveur : document non installé.'); return; }
+  input.disabled = true;
+  try{
+    etat.textContent = ' ⏳ Préparation des images…';
+    const blobs = await accImagesDepuisFichier(file);
+    const pages = [];
+    const horo = Date.now();
+    for(let i = 0; i < blobs.length; i++){
+      etat.textContent = ` ⏳ Envoi de la page ${i + 1} / ${blobs.length}…`;
+      const chemin = `${k}_${horo}_p${i + 1}.jpg`;
+      const {error} = await supa.storage.from('procedures').upload(chemin, blobs[i], {upsert: false, contentType: 'image/jpeg'});
+      if(error) throw error;
+      pages.push(chemin);
+    }
+    const ancien = state.procedures_docs && state.procedures_docs[k];
+    state.procedures_docs = Object.assign({}, state.procedures_docs || {}, {[k]: {pages, date: new Date().toISOString(), par: profilNom || '', fichier: file.name}});
+    await pushState('Document procédure accident : ' + k);
+    if(ancien && Array.isArray(ancien.pages) && ancien.pages.length){
+      supa.storage.from('procedures').remove(ancien.pages).catch(()=>{});
+    }
+    showToast('Document installé (' + pages.length + ' page' + (pages.length > 1 ? 's' : '') + ').');
+    renderAccidentDocs();
+  }catch(e){
+    console.error('installation document procédure', e);
+    etat.textContent = '';
+    showToast('Échec de l\'installation du document : ' + ((e && e.message) || e));
+  }finally{ input.disabled = false; }
+}
+// renderAll() tourne à chaque mise à jour reçue d'un autre poste : les réponses et les cases
+// cochées ne sont pas redessinées (elles seraient perdues en pleine procédure), les documents
+// seulement s'ils ont changé.
+let accDocsSignature = null;
+function renderAccident(){
+  if(!document.getElementById('accQuestions').innerHTML) renderAccidentQuestions();
+  renderAccidentConstat();
+  const sig = JSON.stringify([state.procedures_docs || null, isGestion, !!supa]);
+  if(sig !== accDocsSignature){ accDocsSignature = sig; renderAccidentDocs(); }
 }
 
 function renderDashboard(){
@@ -12587,6 +12866,7 @@ const AIDE_FICHES = [
   {titre:'Plusieurs postes en même temps', q:['deux personnes en meme temps','modification ecrasee','un autre poste venait d enregistrer'], mots:'plusieurs poste meme temps simultane ecrase fusion autre', r:'Pas de risque : si un autre poste enregistre en même temps, vos modifications sont ajoutées aux siennes et un message le signale.', guide:'depannage'},
   {titre:'Données pas à jour', q:['les donnees ne sont pas a jour','mise a jour','temps reel'], mots:'jour actualiser rafraichir recharger f5 temps reel synchronise mise', r:'La pastille « Temps réel actif » doit être verte. Sinon, ou après une mise à jour annoncée, rechargez la page (touche F5). Les bornes se resynchronisent seules toutes les 2 minutes.', guide:'depannage'},
   {titre:'Prendre une photo', q:['prendre une photo','ajouter une photo','appareil photo','joindre une photo','camera'], mots:'photo photos appareil camera prendre joindre image signalement sinistre impact tablette', r:'Dans chaque déclaration (signalement véhicule, incident matériel, sinistre, impact carrosserie), le bouton <b>« 📷 Prendre une photo »</b> ouvre directement l\'appareil photo de la tablette ou du téléphone. Vous pouvez en prendre plusieurs ; chacune s\'ajoute à la liste (✕ pour en retirer une). Sur un PC, le bouton ouvre le choix d\'un fichier.', guide:'signaler'},
+  {titre:'Accident de circulation et constat amiable', q:['j ai eu un accident','que faire en cas d accident','accrochage avec l ambulance','remplir un constat','constat amiable','procedure accident'], mots:'accident accrochage collision choc constat amiable procedure tiers blesse degats casu cecal bra ambulog carte visite assurance zurich', r:'Onglet <b>⚠️ Procédure accident</b> : répondez aux questions (en ou hors intervention, tiers, blessés, dégâts) et suivez les consignes affichées, en cochant au fur et à mesure. Plus bas : ce qu\'il faut écrire sur le <b>constat amiable</b> (choisissez l\'ambulance : plaque et assurance s\'affichent), les procédures d\'origine et le modèle de constat annoté. Bouton « Déclarer le sinistre dans le logiciel » pour joindre ensuite la photo du constat signé. Gestion : « Remplacer le document » sous chaque document (PDF ou image).', vue:'accident'},
   {titre:'Brancard et système de chargement', q:['numero de serie brancard','power pro','power load','systeme de chargement','deplacer un brancard'], mots:'brancard stryker power pro load chargement levage fixe electrique numero serie systeme', r:'Un brancard Stryker = deux fiches matériel : le <b>Brancard</b> électrique (Power-PRO), qui peut changer d\'ambulance (glisser son icône sur l\'État de la flotte), et le <b>Système de chargement</b> (Power-LOAD), fixé dans l\'ambulance, qui reste avec le véhicule. Chacun a son numéro de série et sa date de révision, à refaire tous les 2 ans : Fiches matériel → la fiche → ✏️ Modifier.', vue:'materiel-fiches'},
   {titre:'Contrôles et matériel d\'une ambulance', q:['ou voir les controles d une ambulance','materiel d une ambulance','date de revision du scope','onglet materiel medical'], mots:'controle controles materiel embarque medical fiche revision scope brancard aspiration chaise extincteur peremption desinfection suivi ambulance', r:'Onglet <b>Contrôles & matériel</b> (anciennement « Matériel médical ») : un tableau, une ligne par ambulance : une pastille de couleur et la date du dernier contrôle (péremptions, suivi hebdomadaire, désinfection complète, désinfection des sacs), puis le matériel embarqué en 3 pastilles (vert, orange, rouge). Survolez une case pour le détail ; « Détail » ouvre la liste des contrôles et des appareils (un clic ouvre la fiche de l\'appareil, ✏️ corrige les dates des contrôles).', vue:'materiel'},
   {titre:'Corriger ou supprimer un relevé km', q:['erreur de kilometrage','corriger un releve km','supprimer un releve','mauvais km','ajouter un releve km'], mots:'kilometrage km releve releves erreur faute corriger supprimer effacer modifier ajouter compteur', r:'Mode gestion, onglet <b>Carnet d\'entretien</b>, ambulance concernée, partie « Suivi des niveaux et relevés km » : ✏️ sur la ligne pour corriger la date, le km ou les initiales, ou « 🗑️ Supprimer ce relevé ». « + Ajouter un relevé km » saisit un relevé seul (ex. relevé général). Le kilométrage de l\'ambulance est recalculé automatiquement à partir du relevé le plus récent.', vue:'carnet'},
@@ -12906,7 +13186,7 @@ setInterval(()=>{
 // ouvert depuis le PC : pas de vérification. Si une version plus récente est en ligne : bandeau
 // « Mettre à jour » (jamais de rechargement imposé sur un poste normal) ; une borne se recharge
 // seule après 5 min sans activité, si aucune fenêtre n'est ouverte et que tout est enregistré.
-const VERSION_LOGICIEL = '20261110-172208';
+const VERSION_LOGICIEL = '20261116-140036';
 let versionEnLigne = null;
 let derniereActivitePoste = Date.now();
 ['pointerdown','keydown','touchstart'].forEach(ev => document.addEventListener(ev, ()=>{ derniereActivitePoste = Date.now(); }, {passive:true, capture:true}));
