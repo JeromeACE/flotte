@@ -1,3 +1,3 @@
-Préparé le 16.11.2026 15:08
-Dernier enregistrement : 26b3eef 16.11.2026 15:07 Proc├®dure accident : boutons de choix des documents visibles (style corrig├®)
-Code : 20261116-150834
+Préparé le 19.11.2026 16:46
+Dernier enregistrement : 8f35db5 19.11.2026 16:43 Cl├┤ture automatique : relire le serveur avant de cl├┤turer (poste pas ├á jour avait referm├® l'intervention ACE 707)
+Code : 20261119-164651

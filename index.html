@@ -3192,10 +3192,10 @@ async function pushStateNow(actionLabel){
 // versions_etat() ne renvoie que les identifiants et versions (requête légère) ; seules
 // les fiches qui ont changé sont ensuite relues.
 async function resyncFromServer(){
-  if(!supa || !serverLoaded || pushInFlight) return;
+  if(!supa || !serverLoaded || pushInFlight) return false;
   try{
     const {data, error} = await supa.rpc('versions_etat');
-    if(error || !data || pushInFlight) return;
+    if(error || !data || pushInFlight) return false;
     let change = false;
     for(const t of TABLES_FICHES.concat(['reglages'])){
       const srv = data[t] || {}, loc = versionsServeur[t] || {};
@@ -3212,7 +3212,8 @@ async function resyncFromServer(){
     }
     if(change) apresChangementsDistants();
     if(saveErrorActive) pushState('Nouvelle tentative après resynchronisation');
-  }catch(e){ console.error('resynchronisation impossible', e); }
+    return true;
+  }catch(e){ console.error('resynchronisation impossible', e); return false; }
 }
 // Journal d'activité global du mode direction : chaque enregistrement (pushState)
 // effectué en mode direction (complète ou opérationnelle) est tracé avec le profil et
@@ -13150,7 +13151,12 @@ init();
 // leur échéance de fin pendant que l'app reste ouverte (ex. tableau affiché en
 // permanence sur un écran) — sans ça, la clôture automatique ne se déclencherait qu'au
 // prochain rechargement de la page (voir autoCloseTravauxPassedDeadline).
+// 19.11.2026 : un poste resté ouvert sans recevoir les mises à jour (PC en veille) a
+// refermé l'intervention ACE 707 d'après son ANCIENNE date de fin, alors que la date
+// venait d'être reculée ailleurs. On relit donc d'abord les fiches du serveur ; si la
+// relecture échoue, on ne clôture rien (la base le fait elle-même toutes les 10 min).
 setInterval(async () => {
+  if(supa && serverLoaded && !(await resyncFromServer())) return;
   if(autoCloseTravauxPassedDeadline()){
     await pushState();
     renderAll();
@@ -13186,7 +13192,7 @@ setInterval(()=>{
 // ouvert depuis le PC : pas de vérification. Si une version plus récente est en ligne : bandeau
 // « Mettre à jour » (jamais de rechargement imposé sur un poste normal) ; une borne se recharge
 // seule après 5 min sans activité, si aucune fenêtre n'est ouverte et que tout est enregistré.
-const VERSION_LOGICIEL = '20261116-150834';
+const VERSION_LOGICIEL = '20261119-164651';
 let versionEnLigne = null;
 let derniereActivitePoste = Date.now();
 ['pointerdown','keydown','touchstart'].forEach(ev => document.addEventListener(ev, ()=>{ derniereActivitePoste = Date.now(); }, {passive:true, capture:true}));
